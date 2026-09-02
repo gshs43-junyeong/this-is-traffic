@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>고속도로 주행 시뮬레이터 — 실교통류 기반</title>
+<style>
+:root{
+  --bg:#0b0d12; --panel:#141821; --panel2:#1b2029; --line:#2a3140;
+  --ink:#e6e9ef; --dim:#8d96a8; --acc:#5fc48f; --warn:#e0a63a; --bad:#e2574c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;overflow:hidden}
+body{font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",-apple-system,system-ui,sans-serif;
+  color:var(--ink);user-select:none;-webkit-font-smoothing:antialiased}
+#app{position:fixed;inset:0}
+#view{position:absolute;inset:0;width:100%;height:100%;background:#0b0d12;display:block}
+
+/* ================= HUD ================= */
+#hud{position:absolute;inset:0;pointer-events:none;font-size:13px}
+.card{background:#10141bd9;border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 6px 24px #0008;backdrop-filter:blur(6px)}
+
+/* 속도계 */
+#gauge{position:absolute;left:20px;bottom:20px;width:150px;height:150px}
+#gauge svg{position:absolute;inset:0}
+#gauge .num{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#spd{font-size:40px;font-weight:700;line-height:1;letter-spacing:-.02em}
+#spdUnit{font-size:11px;color:var(--dim);margin-top:3px}
+#limitSign{position:absolute;right:-6px;top:4px;width:38px;height:38px;border-radius:50%;
+  background:#fff;color:#111;border:4px solid #d33;display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:800}
+
+/* 좌상단 도로 정보 */
+#roadbox{position:absolute;left:20px;top:16px;width:236px;padding:11px 13px}
+#roadbox h3{font-size:11px;color:var(--dim);font-weight:600;letter-spacing:.06em;margin-bottom:7px}
+.row{display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;font-size:12.5px}
+.row .k{color:var(--dim)}
+.row .v{font-variant-numeric:tabular-nums;font-weight:600}
+.v.tun{color:#a89bd8} .v.brg{color:#7fc0d8}
+#nextIC{color:var(--acc);font-weight:600}
+
+/* 우상단 교통 상태 */
+#trafbox{position:absolute;right:20px;top:16px;width:250px;padding:11px 13px}
+.los{display:inline-block;min-width:22px;text-align:center;padding:1px 5px;border-radius:4px;
+  font-weight:800;color:#0b0d12}
+.losA,.losB{background:#5fc48f}.losC{background:#a8c85f}.losD{background:#e0c33a}
+.losE{background:#e08c3a}.losF{background:#e2574c;color:#fff}.los-{background:#555}
+
+/* 돌발상황 */
+#incbox{position:absolute;right:20px;top:210px;width:250px;padding:9px 12px;font-size:12px}
+#incList{list-style:none}
+#incList li{padding:3px 0 3px 9px;border-left:2px solid var(--warn);margin-bottom:3px;line-height:1.35}
+#incList li.bk{border-color:var(--bad)}
+#incList li.none{border-color:var(--line);color:var(--dim)}
+
+/* 하단 지도 */
+#mapWrap{position:absolute;left:50%;transform:translateX(-50%);bottom:16px;padding:6px}
+#mapCv{display:block;border-radius:4px}
+#mapLegend{display:flex;gap:12px;justify-content:center;font-size:10.5px;color:var(--dim);margin-top:5px}
+#mapLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+
+/* 버튼 */
+#tools{position:absolute;right:20px;bottom:20px;display:flex;flex-direction:column;gap:7px;pointer-events:auto}
+button{font:inherit;font-size:12.5px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;padding:8px 13px;cursor:pointer;transition:.12s}
+button:hover{background:#252c38;border-color:#3d4757}
+button.on{background:#1e4d38;border-color:var(--acc);color:#bff0d6}
+button.warn{border-color:var(--warn);color:var(--warn)}
+button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-weight:600}
+
+#toast{position:absolute;left:50%;top:76px;transform:translate(-50%,-12px);
+  background:#0f141cf0;border:1px solid var(--line);border-radius:8px;padding:9px 17px;font-size:13px;
+  opacity:0;transition:.25s;pointer-events:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+
+#keys{position:absolute;left:20px;bottom:186px;font-size:11px;color:#6a7386;line-height:1.65}
+#keys b{color:#98a2b5;font-weight:600}
+
+/* ================= 설정 패널 ================= */
+#panel{position:absolute;inset:0;background:#070910e8;display:none;overflow:auto;pointer-events:auto;
+  backdrop-filter:blur(3px)}
+#panel.on{display:block}
+.wrap{max-width:1060px;margin:0 auto;padding:26px 22px 60px}
+.phead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.phead h1{font-size:19px;font-weight:700}
+.phead p{font-size:12px;color:var(--dim);margin-top:3px}
+.tabs{display:flex;gap:6px;margin:18px 0 14px;border-bottom:1px solid var(--line)}
+.tab{padding:8px 15px;font-size:13px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:var(--ink);border-color:var(--acc)}
+.tabpage{display:none}.tabpage.on{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:13px}
+.fld{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
+.fld label{display:block;font-size:12px;color:var(--dim);margin-bottom:7px}
+.fld .val{float:right;color:var(--acc);font-variant-numeric:tabular-nums;font-weight:600}
+.fld input[type=range]{width:100%;accent-color:var(--acc)}
+.fld select{width:100%;background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:6px;padding:7px 9px;font:inherit;font-size:13px}
+.fld .hint{font-size:11px;color:#69728a;margin-top:6px;line-height:1.5}
+.chk{display:flex;align-items:center;gap:9px}
+.chk input{width:16px;height:16px;accent-color:var(--acc)}
+.chk label{margin:0}
+.sect{font-size:12px;color:var(--dim);letter-spacing:.06em;margin:22px 0 10px;font-weight:600}
+.presets{display:flex;flex-wrap:wrap;gap:8px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.charts{grid-template-columns:1fr}}
+.chart{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px}
+.chart h4{font-size:12.5px;margin-bottom:3px}
+.chart p{font-size:11px;color:var(--dim);margin-bottom:9px;line-height:1.5}
+.chart canvas{width:100%;height:auto;display:block;border-radius:5px}
+#stats table{width:100%;border-collapse:collapse;font-size:12.5px}
+#stats th{text-align:left;color:var(--dim);font-weight:500;padding:5px 10px 5px 0;white-space:nowrap}
+#stats td{text-align:right;font-variant-numeric:tabular-nums;padding:5px 0;border-bottom:1px solid #1c2230}
+.doc{font-size:12.5px;line-height:1.75;color:#b9c1d0}
+.doc h4{font-size:13.5px;color:var(--ink);margin:16px 0 6px}
+.doc code{background:#1b2029;padding:1.5px 5px;border-radius:4px;font-size:12px;color:#a8d8bd}
+.doc ul{margin:6px 0 6px 18px}
+.doc .ref{color:#69728a;font-size:11.5px}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="view"></canvas>
+
+  <div id="hud">
+    <!-- 도로 정보 -->
+    <div id="roadbox" class="card">
+      <h3>도로</h3>
+      <div class="row"><span class="k">위치</span><span class="v" id="stn">0.0 km</span></div>
+      <div class="row"><span class="k">종단경사</span><span class="v" id="gradeV">+0.0%</span></div>
+      <div class="row"><span class="k">평면선형</span><span class="v" id="curveV">직선</span></div>
+      <div class="row"><span class="k">구조물</span><span class="v" id="structV">토공</span></div>
+      <div class="row"><span class="k">주행차로</span><span class="v" id="laneV">3차로</span></div>
+      <div class="row"><span class="k">다음 시설</span><span class="v" id="nextIC">—</span></div>
+    </div>
+
+    <!-- 교통 상태 -->
+    <div id="trafbox" class="card">
+      <h3>교통류 (반경 600m)</h3>
+      <div class="row"><span class="k">서비스수준 LOS</span><span class="v"><span class="los los-" id="losV">-</span></span></div>
+      <div class="row"><span class="k">밀도 k</span><span class="v"><span id="kV">—</span> 대/km/차로</span></div>
+      <div class="row"><span class="k">교통량 q</span><span class="v"><span id="qV">—</span> 대/시/차로</span></div>
+      <div class="row"><span class="k">평균속도</span><span class="v"><span id="vV">—</span> km/h</span></div>
+      <div class="row"><span class="k">평균 지체</span><span class="v" id="delayV">0:00</span></div>
+      <div class="row"><span class="k">통행시간지수</span><span class="v" id="ttiV">1.00</span></div>
+      <div class="row"><span class="k">모의 차량</span><span class="v" id="nvehV">0</span></div>
+      <div class="row"><span class="k">경과</span><span class="v" id="clockV">0:00</span></div>
+    </div>
+
+    <div id="incbox" class="card">
+      <h3 style="font-size:11px;color:var(--dim);margin-bottom:6px">돌발상황</h3>
+      <ul id="incList"><li class="none">진행 중인 돌발상황 없음</li></ul>
+    </div>
+
+    <!-- 속도계 -->
+    <div id="gauge">
+      <svg viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="50" fill="#10141bd9" stroke="#2a3140" stroke-width="1"/>
+        <circle cx="60" cy="60" r="50" fill="none" stroke="#222937" stroke-width="7"
+                stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)"/>
+        <circle id="gaugeArc" cx="60" cy="60" r="50" fill="none" stroke="#5fc48f" stroke-width="7"
+                stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="314"
+                transform="rotate(-90 60 60)" style="transition:stroke-dashoffset .09s linear"/>
+      </svg>
+      <div class="num"><div id="spd">0</div><div id="spdUnit">km/h</div></div>
+      <div id="limitSign">100</div>
+    </div>
+
+    <div id="keys">
+      <b>W/S</b> 가속·제동 &nbsp; <b>A/D</b> 조향 &nbsp; <b>Space</b> 급제동<br>
+      <b>C</b> 시점 &nbsp; <b>P</b> 자율주행 &nbsp; <b>I</b> 사고 발생 &nbsp; <b>R</b> 위치복귀<br>
+      <b>M</b> 지도 &nbsp; <b>X</b> 배속 &nbsp; <b>N</b> 소리 &nbsp; <b>Esc</b> 설정·분석
+    </div>
+
+    <!-- 전 구간 지도 -->
+    <div id="mapWrap" class="card">
+      <canvas id="mapCv" width="760" height="62"></canvas>
+      <div id="mapLegend">
+        <span><i style="background:#2e9e5b"></i>자유류</span>
+        <span><i style="background:#f9a825"></i>지체</span>
+        <span><i style="background:#c62828"></i>정체</span>
+        <span><i style="background:#3a3550"></i>터널</span>
+        <span><i style="background:#2f4550"></i>교량</span>
+        <span><i style="background:#fff"></i>내 차</span>
+      </div>
+    </div>
+
+    <div id="tools">
+      <button data-act="auto">자율주행 (P)</button>
+      <button data-act="cam">시점 전환 (C)</button>
+      <button data-act="incident">사고 발생 (I)</button>
+      <button data-act="speed">배속 ×1</button>
+      <button id="btnMenu" class="primary">설정 · 분석 (Esc)</button>
+    </div>
+
+    <div id="toast"></div>
+  </div>
+
+  <!-- ================= 설정 · 분석 ================= -->
+  <div id="panel">
+    <div class="wrap">
+      <div class="phead">
+        <div>
+          <h1>고속도로 주행 시뮬레이터</h1>
+          <p>IDM · MOBIL 기반 미시 교통류 모의 — 지형을 따라가는 실제 설계기준 노선 위에서</p>
+        </div>
+        <button id="btnClose">닫기 (Esc)</button>
+      </div>
+
+      <div class="tabs">
+        <div class="tab on" data-tab="set">설정</div>
+        <div class="tab" data-tab="ana">분석</div>
+        <div class="tab" data-tab="doc">모델 근거</div>
+      </div>
+
+      <!-- ---------- 설정 ---------- -->
+      <div class="tabpage on" data-page="set">
+        <div class="sect">빠른 설정</div>
+        <div class="presets">
+          <button data-preset="free">자유류</button>
+          <button data-preset="near">임계 상태</button>
+          <button data-preset="jam">혼잡·합류 병목</button>
+          <button data-preset="peak">첨두 (수요 변동)</button>
+          <button data-preset="rain">우천 · 황혼</button>
+          <button data-preset="night">야간</button>
+        </div>
+
+        <div class="sect">교통 조건 <span style="color:#69728a;font-weight:400">— 즉시 반영</span></div>
+        <div class="grid">
+          <div class="fld"><label>상류 유입 수요 <span class="val"></span></label>
+            <input type="range" min="200" max="2600" step="50" data-cfg="demand" data-num="1" data-live="1">
+            <div class="hint">차로당 시간교통량. 용량(약 2,000~2,200 대/시/차로)을 넘기면 상류에 대기행렬이 자란다.</div></div>
+          <div class="fld"><label>화물차 비율 <span class="val"></span></label>
+            <input type="range" min="0" max="40" step="1" data-cfg="truckPct" data-num="1" data-live="1">
+            <div class="hint">기본 10%. 오르막에서 등판 평형속도까지 떨어져 이동 병목이 된다.</div></div>
+          <div class="fld"><label>버스 비율 <span class="val"></span></label>
+            <input type="range" min="0" max="20" step="1" data-cfg="busPct" data-num="1" data-live="1">
+            <div class="hint">기본 5%.</div></div>
+          <div class="fld"><label>램프 진입 수요 <span class="val"></span></label>
+            <input type="range" min="0" max="35" step="1" data-cfg="rampPct" data-num="1" data-live="1">
+            <div class="hint">본선 수요 대비 비율. 합류부는 고속도로에서 가장 흔한 병목이다.</div></div>
+          <div class="fld"><label>인터체인지 유출 비율 <span class="val"></span></label>
+            <input type="range" min="0" max="40" step="1" data-cfg="exitPct" data-num="1" data-live="1"></div>
+          <div class="fld"><label>제한속도 <span class="val"></span></label>
+            <input type="range" min="60" max="120" step="10" data-cfg="limit" data-num="1" data-live="1">
+            <div class="hint">화물차는 별도로 90 km/h 로 제한된다.</div></div>
+          <div class="fld"><label>돌발상황 발생률 <span class="val"></span></label>
+            <input type="range" min="0" max="4" step="0.1" data-cfg="incidentRate" data-num="1" data-live="1">
+            <div class="hint">갓길 고장차(구경 지체)와 차로 차단 사고가 섞여 발생한다.</div></div>
+          <div class="fld"><label>기상</label>
+            <select data-cfg="weather" data-live="1"><option value="dry">맑음</option><option value="rain">우천</option></select>
+            <div class="hint">우천 시 희망속도 −10%, 희망 차두시간 +15%, 마찰계수 저하.</div></div>
+          <div class="fld"><label>시간대</label>
+            <select data-cfg="timeOfDay" data-live="1"><option value="day">주간</option><option value="dusk">황혼</option><option value="night">야간</option></select></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbPeak" data-cfg="peak" data-live="1">
+            <div><label for="cbPeak">첨두 수요 프로파일</label>
+              <div class="hint">수요가 서서히 용량을 넘었다가 되돌아온다. 정체의 발생과 해소를 한 번에 볼 수 있다.</div></div></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbRule" data-cfg="laneRule" data-live="1">
+            <div><label for="cbRule">지정차로제</label>
+              <div class="hint">1차로는 추월차로, 대형차는 오른쪽 차로. 끄면 차로 이용이 균등해진다.</div></div></div>
+        </div>
+
+        <div class="sect">운전자 모형 <span style="color:#69728a;font-weight:400">— 즉시 반영</span></div>
+        <div class="grid">
+          <div class="fld"><label>지각 반응시간 <span class="val"></span></label>
+            <input type="range" min="0" max="1.2" step="0.05" data-cfg="reactionTime" data-num="1" data-live="1">
+            <div class="hint">클수록 열이 불안정해져 유령정체(phantom jam)가 쉽게 생긴다.</div></div>
+          <div class="fld"><label>가속도 잡음 <span class="val"></span></label>
+            <input type="range" min="0" max="2.5" step="0.1" data-cfg="noise" data-num="1" data-live="1">
+            <div class="hint">0 이면 결정론적 IDM. 실측만큼의 정체파를 보려면 잡음이 필요하다.</div></div>
+        </div>
+
+        <div class="sect">지형 <span style="color:#69728a;font-weight:400">— 재생성 필요. 이 셋이 곡선·경사·구조물을 함께 결정한다</span></div>
+        <div class="presets" style="margin-bottom:13px">
+          <button data-preset="plain">평야부</button>
+          <button data-preset="hill">구릉지</button>
+          <button data-preset="mount">산악부</button>
+        </div>
+        <div class="grid">
+          <div class="fld"><label>기복 — 산의 높이 <span class="val"></span></label>
+            <input type="range" min="0" max="100" step="1" data-cfg="relief" data-num="1">
+            <div class="hint">산줄기와 마루의 진폭. 높을수록 절·성토가 커져 교량·터널이 늘고,
+              선형이 최소반경 쪽으로 굽는다.</div></div>
+          <div class="fld"><label>산 밀도 <span class="val"></span></label>
+            <input type="range" min="0" max="100" step="1" data-cfg="density" data-num="1">
+            <div class="hint">마루가 들어찬 정도와 산줄기 파장. 높을수록 산이 촘촘해져
+              노선이 쉴 새 없이 방향을 바꾼다.</div></div>
+          <div class="fld"><label>험준도 — 사면의 날카로움 <span class="val"></span></label>
+            <input type="range" min="0" max="100" step="1" data-cfg="ruggedness" data-num="1">
+            <div class="hint">마루 폭이 좁아지고 계곡이 깊어진다. 우회로가 사라져
+              결국 산을 뚫거나 계곡을 건너게 된다.</div></div>
+          <div class="fld"><label>쌍굴 이격 <span class="val"></span></label>
+            <input type="range" min="12" max="46" step="2" data-cfg="tunnelSep" data-num="1">
+            <div class="hint">터널에서 두 방향 차도를 벌리는 거리. 사이에 남는 암반이 중앙 필러가 된다.
+              본선에서 이 거리까지는 완만한 테이퍼로 벌어졌다 다시 좁혀진다.</div></div>
+        </div>
+
+        <div class="sect">노선 <span style="color:#69728a;font-weight:400">— 재생성 필요</span></div>
+        <div class="grid">
+          <div class="fld"><label>차로 수 <span class="val"></span></label>
+            <input type="range" min="2" max="5" step="1" data-cfg="lanes" data-num="1"></div>
+          <div class="fld"><label>노선 연장 <span class="val"></span></label>
+            <input type="range" min="8000" max="40000" step="1000" data-cfg="length" data-num="1"></div>
+          <div class="fld"><label>지형 시드 <span class="val"></span></label>
+            <input type="range" min="1" max="9999" step="1" data-cfg="seed" data-num="1">
+            <div class="hint">지형이 바뀌면 곡선·경사·교량·터널·인터체인지 위치가 모두 달라진다.</div></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbLka" data-cfg="lka" data-live="1">
+            <div><label for="cbLka">차선유지보조 (LKA)</label>
+              <div class="hint">조향을 놓으면 차로 중심을 잡아 준다. 끄면 곡선부에서 직접 잡고 있어야 한다.</div></div></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cb2w" data-cfg="twoWay">
+            <div><label for="cb2w">반대편 차도 모의</label>
+              <div class="hint">끄면 계산량이 절반으로 준다.</div></div></div>
+        </div>
+        <div style="margin-top:16px"><button id="btnRegen" class="primary">노선 재생성</button></div>
+      </div>
+
+      <!-- ---------- 분석 ---------- -->
+      <div class="tabpage" data-page="ana">
+        <div class="charts">
+          <div class="chart">
+            <h4>기본도표 (fundamental diagram)</h4>
+            <p>500m 간격 검지기의 1분 집계. 자유류 가지가 위로 뻗다가 용량 부근에서 꺾이고,
+               혼잡류 가지가 아래로 내려온다. 점 색은 그때의 속도.</p>
+            <canvas id="fdCv" width="480" height="300"></canvas>
+          </div>
+          <div class="chart">
+            <h4>시공간 속도장 (x–t diagram)</h4>
+            <p>가로는 위치, 세로는 시간(아래가 현재). 붉은 띠가 왼쪽 아래로 기울어 내려가면
+               정체파가 상류로 번지고 있다는 뜻이다.</p>
+            <canvas id="stCv" width="480" height="300"></canvas>
+          </div>
+        </div>
+        <div class="sect">통계</div>
+        <div class="chart" id="stats"></div>
+      </div>
+
+      <!-- ---------- 근거 ---------- -->
+      <div class="tabpage" data-page="doc">
+        <div class="chart doc">
+          <h4>차두 추종 — IDM</h4>
+          <p>Treiber, Hennecke &amp; Helbing (2000), <i>Congested traffic states in empirical
+          observations and microscopic simulations</i>, Phys. Rev. E 62, 1805.</p>
+          <code>dv/dt = a [ 1 − (v/v₀)⁴ − (s*/s)² ],&nbsp; s* = s₀ + max(0, vT + v·Δv / 2√(ab))</code>
+          <p class="ref">희망 차두시간 T 는 도로용량편람(2013)의 기본구간 용량 2,200 승용차/시/차로에
+          맞춰 재보정했다(승용차 0.98 s). 표의 대표값 1.5 s 를 그대로 쓰면 평형해 용량이 실측보다 낮게 나온다.</p>
+
+          <h4>지각 지연 — Human Driver Model</h4>
+          <p>Treiber, Kesting &amp; Helbing (2006), Physica A 360, 71. 운전자는 반응시간만큼
+          지연된 선행차 상태에 반응한다. 여기에 Ornstein–Uhlenbeck 유색잡음을 더하면
+          임계밀도 부근에서 <b>유령정체</b>가 저절로 생긴다.</p>
+
+          <h4>차로 변경 — MOBIL</h4>
+          <p>Kesting, Treiber &amp; Helbing (2007), TRR 1999, 86.</p>
+          <code>안전: ã(뒷차) &gt; −b_safe &nbsp;/&nbsp; 유인: Δa(자신) + p·Σ Δa(주변) &gt; Δa_th + bias</code>
+          <ul>
+            <li>bias 에 우측주행 원칙과 지정차로제를 싣는다</li>
+            <li>램프·부가차로 종점·차단 사고 앞에서는 bias 가 커지고 b_safe 가 완화되어 <b>강제 차로변경</b>이 된다</li>
+            <li>본선 차량의 <b>협조 양보</b>가 없으면 합류가 성립하지 않으므로 함께 모형화했다</li>
+            <li>합류 직후 희망 차두시간을 줄였다가 회복시킨다 (Laval &amp; Leclercq 2008 의 relaxation)</li>
+          </ul>
+
+          <h4>도로 선형</h4>
+          <ul>
+            <li>평면: 직선 – 클로소이드 – 원곡선 – 클로소이드. 곡률을 거리에 대해 선형으로 변화시켜 구현</li>
+            <li><code>R_min = V²/127(e+f)</code> — 설계속도 100 km/h 에서 437 m. 실제 생성값은 620 m 이상</li>
+            <li>편경사 <code>e(R) = e_max(2·R_min/R − (R_min/R)²)</code> (AASHTO Method 5 근사)</li>
+            <li>종단: 원지반을 평활해 안내선을 만들고, 종단변화점을 뽑아 경사 4.2% 이내로 조정한 뒤
+                <code>L = K·A</code> 의 포물선 종단곡선을 넣는다 (볼록 K=60, 오목 K=45)</li>
+            <li>계획고와 원지반의 차로 <b>교량·터널을 자동 판정</b>한다. 성토 14 m 이상이 90 m 넘게
+                이어지면 교량, 절토 15 m 이상이 120 m 넘게 이어지면 터널</li>
+            <li>선형 탐색은 토공량·횡단경사·곡률·진행방향을 함께 평가하되, 일정 높이를 넘는 절·성토는
+                구조물 단가로 대체해 비용 증가를 멈춘다. 이 상한이 없으면 노선이 능선을 무조건 피해 돌아간다</li>
+          </ul>
+
+          <h4>차량 동역학</h4>
+          <p>엔진출력·구름저항·공기저항·종단경사로 자유가속의 상한을 구한다. 종단경사는
+          운전자의 요구가속에서 빼는 값이 아니라 <b>구동력 여유</b>를 깎는 값이다 —
+          그래야 여유 출력이 있는 승용차는 오르막에서도 속도를 지키고,
+          출력이 모자란 화물차만 등판 평형속도(4% 구배에서 약 70 km/h)로 떨어진다.</p>
+
+          <h4>서비스수준</h4>
+          <p>HCM 기본구간 밀도 기준 — A ≤ 7, B ≤ 11, C ≤ 16, D ≤ 22, E ≤ 28, F &gt; 28 (pc/km/차로).
+          중차량은 승용차환산계수 1.5 로 환산하며, 종단경사 2% 초과분만큼 계수를 키운다.</p>
+
+          <h4>이 모의에서 실제로 측정된 값</h4>
+          <ul>
+            <li>자유속도 약 100~104 km/h (제한 100 km/h, 준수도 분포 반영)</li>
+            <li>용량 부근 유량 1,700~1,900 대/시/차로, 그때의 속도 85~89 km/h</li>
+            <li>승용차환산 기준 약 1,850~2,050 pc/h/차로 — 종단경사·곡선·중차량 15%·지정차로제가
+                반영된 실노선 조건의 값으로, 평지 이상조건의 2,200 보다 낮게 나오는 것이 정상이다</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="js/util.js"></script>
+<script src="js/road.js"></script>
+<script src="js/traffic.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
