@@ -25,7 +25,7 @@ const CFG_DEFAULT = {
   density: 50,         // 산 밀도 0~100
   ruggedness: 50,      // 험준도(사면이 날선 정도) 0~100
   tunnelSep: 26,       // 쌍굴 이격 (m)
-  view: 'chase',       // cockpit | chase | high
+  view: 'cockpit',     // cockpit | chase | high
 };
 
 const WB = 2.75;                       // 축거 m
@@ -103,7 +103,7 @@ const App = {
     const c = this.corrA;
     const p = new Vehicle().init('car', c.rng, this.cfg);
     p.isPlayer = true;
-    p.color = '#d8d9dc';
+    p.color = '#2f6fd0';      // 내 차 — 채도 있는 한 색으로 고정
     p.lane = p.laneT = c.nLane - 1;
     p.s = 400; p.v = 80 * KMH;
     p.u = p.uT = c.laneU(p.lane);
@@ -335,8 +335,8 @@ const App = {
   /* ---------- 카메라 ---------- */
   updateCam(dt) {
     const p = this.player, c = this.corrA, rd = this.road, view = this.cfg.view;
-    const back = view === 'cockpit' ? 0.35 : view === 'chase' ? 10.5 : 30;
-    const up = view === 'cockpit' ? 1.24 : view === 'chase' ? 3.0 : 16;
+    const back = (view === 'cockpit' ? 0.35 : view === 'chase' ? 8.2 : 30) + (this.surge || 0);
+    const up = view === 'cockpit' ? 1.22 : view === 'chase' ? 2.3 : 16;
     const sC = p.s - back;
     const g = c.geo(sC);
     const u = c.dir > 0 ? (g.med + p.u) : -(g.med + p.u);
@@ -352,7 +352,10 @@ const App = {
     const pitchT = Math.atan2((ahead.z - g.z), 70) * (view === 'high' ? 0.4 : 1) - (view === 'high' ? 0.30 : 0.028);
     // 편경사에 더해, 횡가속만큼 차체가 기운다
     const aLat = p.v * p.v * Math.abs(g.kap) * sgn(g.kap) * c.dir;
-    const rollT = (view === 'cockpit' ? -g.e * 0.75 : -g.e * 0.35) * c.dir + clamp(aLat * 0.012, -0.10, 0.10);
+    // 편경사 + 횡가속 + 조향입력. 조향에 직접 묶인 롤이 꺾는 감각을 만든다.
+    const rollT = (view === 'cockpit' ? -g.e * 0.75 : -g.e * 0.35) * c.dir
+      + clamp(aLat * 0.020, -0.13, 0.13)
+      - (p.steer || 0) * (view === 'high' ? 0.010 : 0.055) * clamp(p.v / 22, 0, 1);
 
     const cam = this.cam;
     if (!this.camInit) { cam.x = tx; cam.y = ty; cam.z = tz; cam.yaw = yawT; cam.pitch = pitchT; cam.roll = rollT; this.camInit = true; }
@@ -361,8 +364,11 @@ const App = {
     cam.yaw += wrapPi(yawT - cam.yaw) * (1 - Math.exp(-dt / (view === 'cockpit' ? 0.05 : 0.13)));
     cam.pitch = approach(cam.pitch, pitchT, 0.18, dt);
     cam.roll = approach(cam.roll, rollT, 0.22, dt);
+    // 가감속에 따라 카메라가 앞뒤로 밀린다 (같은 스프링에 얹는다)
+    const surgeT = clamp((p.a || 0) * -0.09, -0.45, 0.55);
+    this.surge = approach(this.surge || 0, surgeT, 0.22, dt);
     // 속도에 따라 화각을 넓혀 속도감을 준다
-    const fovT = (view === 'cockpit' ? 56 : 55) + 15 * clamp(p.v / 58, 0, 1);
+    const fovT = (view === 'cockpit' ? 53 : 52) + 10 * clamp(p.v / 40, 0, 1);
     this.fov = approach(this.fov || fovT, fovT, 0.5, dt);
     Render.fov = this.fov * Math.PI / 180;
     // 노면 진동 — 빠를수록, 갓길에서는 더 크게
@@ -429,26 +435,45 @@ const App = {
       cam: this.cam, sCam: c.roadS(this.sCam || p.s),
       timeOfDay: this.cfg.timeOfDay, weather: this.cfg.weather,
       inTunnel, time: this.simTime, sunAz: 0.9,
+      hidePlayer: this.cfg.view === 'cockpit',
     });
     if (this.cfg.view === 'cockpit') this.dashboard();
   },
 
-  /** 운전석 시점의 계기판 실루엣 */
+  /** 운전석 시점 — 보닛과 A필러.
+      보닛이 화면 아래를 잡아 주면 속도가 몸으로 읽힌다. */
   dashboard() {
     const ctx = this.ctx, W = this.W, H = this.H;
-    ctx.fillStyle = '#0d0f13';
+    const p = this.player;
+    // 조향·가감속에 따라 보닛이 아주 조금 흔들린다
+    const tilt = (p.steer || 0) * W * 0.012;
+    const bob = clamp((p.a || 0) * -0.004, -0.02, 0.02) * H;
+
+    const top = H * 0.755 + bob;
+    ctx.fillStyle = '#20242b';
     ctx.beginPath();
-    ctx.moveTo(0, H);
-    ctx.lineTo(0, H * 0.80);
-    ctx.quadraticCurveTo(W * 0.5, H * 0.70, W, H * 0.80);
-    ctx.lineTo(W, H);
+    ctx.moveTo(-W * 0.1, H + 2);
+    ctx.lineTo(-W * 0.1, top + H * 0.05);
+    ctx.quadraticCurveTo(W * 0.5 + tilt, top - H * 0.045, W * 1.1, top + H * 0.05);
+    ctx.lineTo(W * 1.1, H + 2);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#181c22';
-    ctx.fillRect(0, H * 0.88, W, H * 0.12);
+    // 보닛 반사 — 위쪽 가장자리를 밝게
+    const g = ctx.createLinearGradient(0, top - H * 0.04, 0, top + H * 0.07);
+    g.addColorStop(0, '#4a525f'); g.addColorStop(1, '#20242b00');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(-W * 0.1, top + H * 0.05);
+    ctx.quadraticCurveTo(W * 0.5 + tilt, top - H * 0.045, W * 1.1, top + H * 0.05);
+    ctx.lineTo(W * 1.1, top + H * 0.10);
+    ctx.quadraticCurveTo(W * 0.5 + tilt, top + H * 0.005, -W * 0.1, top + H * 0.10);
+    ctx.closePath(); ctx.fill();
     // A 필러
-    ctx.fillStyle = '#14171c';
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(W * 0.10, 0); ctx.lineTo(0, H * 0.80); ctx.closePath(); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(W, 0); ctx.lineTo(W * 0.90, 0); ctx.lineTo(W, H * 0.80); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#161a20';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(W * 0.045, 0); ctx.lineTo(0, H * 0.46); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(W, 0); ctx.lineTo(W * 0.955, 0); ctx.lineTo(W, H * 0.46); ctx.closePath(); ctx.fill();
+    // 루프 라인
+    ctx.fillStyle = '#161a20';
+    ctx.fillRect(0, 0, W, H * 0.022);
   },
 };
 

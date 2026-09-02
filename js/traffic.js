@@ -55,9 +55,10 @@ const VCLASS = {
 };
 
 /* 한국 승용차 차체색 분포에 가깝게 */
+/* 한국 승용차 차체색 분포에 가깝게. 채도를 낮게 두어 내 차(단색 파랑)가 구분된다 */
 const CAR_COLORS = [
-  ['#e9eaec', 32], ['#8d9299', 17], ['#26282c', 19], ['#b6bcc4', 11],
-  ['#2f4f8a', 7], ['#8e2c2c', 5], ['#2c5c46', 3], ['#7a5a2c', 3], ['#c8892a', 3],
+  ['#e6e8ea', 30], ['#8a8f96', 18], ['#292b2f', 19], ['#b2b7be', 12],
+  ['#3a4a63', 7], ['#7d3a3a', 5], ['#3a5348', 3], ['#6e5c40', 3], ['#a08344', 3],
 ];
 const TRUCK_COLORS = [['#e6e8ea', 40], ['#2a4a86', 20], ['#9aa1a8', 15], ['#8f2f2f', 10], ['#2f6b4a', 8], ['#c9a227', 7]];
 const BUS_COLORS = [['#e8e9ec', 35], ['#2b5ea8', 25], ['#1f7a52', 15], ['#9c2b2b', 12], ['#d8a72a', 13]];
@@ -79,6 +80,7 @@ const RAMP_LEN = 340;            // 램프 연장 (m)
 const RAMP_OFF = 33;             // 램프 종점의 본선 이격 (m)
 const SIM_BACK = 1100;           // 플레이어 뒤로 계산할 거리 (m)
 const SIM_AHEAD = 3200;          // 플레이어 앞으로 계산할 거리 (m)
+const ON_GORE = 780;             // 진출 노즈에서 진입 노즈까지 (m)
 
 let _vid = 1;
 
@@ -106,6 +108,7 @@ class Vehicle {
     this.hn = 0; this.hs.fill(0); this.hv.fill(0);
     this.missed = false; this.onRamp = null; this.rs = 0;
     this.courteous = rng.chance(0.72);      // 양보하는 운전자 비율
+    this.exitSeen = -1;
     this.yieldStamp = -1; this.yieldTo = null; this.yieldUrg = 0;
     this.stuck = 0;
     return this;
@@ -176,7 +179,10 @@ class Corridor {
       if (sl < 900 || sl > L - 1400) continue;
       this.icLocal.push({ s: sl, name: ic.name, rest: ic.rest });
       raw.push({ s0: sl - 320, s1: sl, type: 'decel', ic: sl });        // 감속차로
-      raw.push({ s0: sl + 380, s1: sl + 700, type: 'accel', ic: sl });  // 가속차로
+      /* 진출로는 [ic, ic+340], 진입로는 [ic+440, ic+780] 을 쓴다.
+         예전처럼 진입 노즈를 ic+380 에 두면 두 램프가 300 m 나 겹쳐
+         같은 자리에 두 번 그려지면서 도로가 끊긴 것처럼 보였다. */
+      raw.push({ s0: sl + ON_GORE, s1: sl + ON_GORE + 320, type: 'accel', ic: sl });  // 가속차로
     }
     this.icLocal.sort((a, b) => a.s - b.s);
 
@@ -248,10 +254,10 @@ class Corridor {
   buildRamps() {
     this.onRamps = []; this.offRamps = [];
     for (const ic of this.icLocal) {
-      const acc = this.auxAt(ic.s + 420);
+      const acc = this.auxAt(ic.s + ON_GORE + 40);
       this.onRamps.push({
-        s: ic.s + 380, name: ic.name, queue: [], len: 320, wait: 0, served: 0, rejected: 0,
-        auxEnd: acc ? acc.s1 : ic.s + 700, qDelay: 0,
+        s: ic.s + ON_GORE, name: ic.name, queue: [], len: RAMP_LEN, wait: 0, served: 0, rejected: 0,
+        auxEnd: acc ? acc.s1 : ic.s + ON_GORE + 320, qDelay: 0,
       });
       this.offRamps.push({ s: ic.s, name: ic.name, taken: 0, out: [] });
     }
@@ -397,6 +403,7 @@ class Corridor {
         v.decide -= dt;
         if (v.decide > 0) continue;
         v.decide = 0.30 + this.rng.next() * 0.25;
+        this.considerExit(v);
         this.tryLaneChange(v, dSteps);
       }
     }
@@ -487,6 +494,7 @@ class Corridor {
       const v = auxArr[i];
       if (v.obstacle) continue;
       const a = this.auxAt(v.s);
+      if (this.isExiting(v, a)) continue;      // 빠져나가는 차는 자리를 청하지 않는다
       const end = a ? a.s1 : v.s;
       const urg = clamp(1 - (end - v.s) / 260, 0, 1);
       if (urg < 0.20) continue;
@@ -516,15 +524,19 @@ class Corridor {
     foll.yieldStamp = this.stepId; foll.yieldTo = v; foll.yieldUrg = urg;
   }
 
+  /** 이 부가차로가 이 차에게 '출구'인가 (감속차로를 타고 인터체인지로 빠지는 중) */
+  isExiting(v, a) {
+    return !!a && isFinite(v.exitS) && v.exitS >= a.s1 - 5 && v.exitS <= a.s1 + 60;
+  }
+
   /** 앞에서 반드시 멈춰야 하는 지점 (없으면 null) */
   hardStopAhead(v) {
-    let stop = null;
-    if (v.lane === this.nLane) {                       // 부가차로 종점
-      const a = this.auxAt(v.s);
-      if (a) stop = a.s1 - 6;
-      else stop = v.s + 2;                             // 이미 벗어난 비정상 상태
-    }
-    return stop;
+    if (v.lane !== this.nLane) return null;
+    const a = this.auxAt(v.s);
+    // 감속차로를 타고 빠져나가는 차에게 종점은 출구다. 여기서 세우면
+    // 정작 빠져야 할 차가 노즈 앞에서 급제동하고 본선으로 되돌아간다.
+    if (this.isExiting(v, a)) return null;
+    return a ? a.s1 - 6 : v.s + 2;                     // 종점 / 이미 벗어난 비정상 상태
   }
 
   integrate(v, dt) {
@@ -547,7 +559,7 @@ class Corridor {
   tryLaneChange(v, dSteps) {
     // 부가차로 종점에서 오래 갇힌 차는 물리적 여유만 있으면 밀고 들어간다.
     // 실제로도 이런 차 때문에 본선이 한 번 출렁이며 용량 저하(capacity drop)가 일어난다.
-    if (v.stuck > 12 && v.lane === this.nLane) {
+    if (v.stuck > 12 && v.lane === this.nLane && !this.isExiting(v, this.auxAt(v.s))) {
       const tl = this.nLane - 1, arr = this.lanes[tl];
       const k = this.seek(arr, v.s);
       const lead = arr[k] || null, foll = arr[k - 1] || null;
@@ -620,9 +632,10 @@ class Corridor {
   /** 강제 차로변경 필요성 — 방향과 절박도 */
   mandatory(v) {
     let dir = 0, urg = 0;
-    // (a) 부가차로 종점
+    // (a) 부가차로 종점 — 단, 출구로 빠지는 차는 그대로 두어야 한다
     if (v.lane === this.nLane) {
       const a = this.auxAt(v.s);
+      if (this.isExiting(v, a)) return { dir: 0, urg: 0 };
       const end = a ? a.s1 : v.s;
       urg = clamp(1 - (end - v.s) / 260, 0, 1);
       return { dir: -1, urg: Math.max(urg, 0.15) };
@@ -696,14 +709,24 @@ class Corridor {
     return v;
   }
 
-  /** 유출 인터체인지 배정 */
-  assignExit(v, fromS) {
+  /* 유출 배정.
+     예전에는 생성 시점에 한 번만 굴렸는데, 계산 창이 3.2 km 라 그때 앞에
+     보이는 램프가 없으면 영영 유출하지 않았다(실제로 유출률이 0 이 됐다).
+     이제는 램프에 다가갈 때마다 그 램프에 대해 딱 한 번씩 굴린다. */
+  assignExit(v, fromS) { v.exitS = Infinity; v.exitSeen = -1; }
+
+  considerExit(v) {
+    if (v.isPlayer || isFinite(v.exitS)) return;
     const p = this.cfg.exitPct / 100;
-    for (const r of this.offRamps) {
-      if (r.s < fromS + 700) continue;
-      if (this.rng.chance(p)) { v.exitS = r.s; return; }
+    if (p <= 0) return;
+    for (let i = 0; i < this.offRamps.length; i++) {
+      const d = this.offRamps[i].s - v.s;
+      if (d < 480 || d > 1900) continue;
+      if (v.exitSeen === this.offRamps[i].s) return;   // 이 램프는 이미 판단했다
+      v.exitSeen = this.offRamps[i].s;
+      if (this.rng.chance(p)) v.exitS = this.offRamps[i].s;
+      return;
     }
-    v.exitS = Infinity;
   }
 
   /** 모의 대상 구간 — 플레이어 주변만 계산한다 */
@@ -823,9 +846,12 @@ class Corridor {
         r.queue.push(v);
       }
       // 램프 위 주행 (자체 IDM)
-      for (let i = r.queue.length - 1; i >= 0; i--) {
+      /* queue[0] 이 가장 앞선 차다(먼저 들어온 차가 더 멀리 갔다).
+         선행차는 i-1 이지 i+1 이 아니다. 뒤집혀 있어서 램프 위의 차들이
+         서로를 못 보고 겹쳐 지나갔고, 노즈에서의 합류 판단도 엉뚱한 차가 했다. */
+      for (let i = 0; i < r.queue.length; i++) {
         const v = r.queue[i];
-        const lead = r.queue[i + 1] || null;
+        const lead = r.queue[i - 1] || null;
         const v0 = Math.min(v.v0own, 80 * KMH);
         let acc;
         if (lead) acc = idmAccel(v.v, v0, lead.s - v.s - lead.len, v.v - lead.v, v.p.a * v.aggr, v.Tbase, v.p.s0, v.sqrtAB);
@@ -853,7 +879,7 @@ class Corridor {
           const k = this.seek(aux, v.s);
           const nose = aux[k] || null, back = aux[k - 1] || null;
           if ((!nose || nose.s - v.s - nose.len > 3) && (!back || v.s - back.s - v.len > 3)) {
-            r.queue.splice(i, 1);
+            r.queue.splice(i, 1); i--;
             v.onRamp = null; v.relax = 1; v.s0enter = v.s; v.dz = 0; v.rampT = 0;
             v.lane = this.nLane; v.laneT = this.nLane; v.uT = this.laneU(this.nLane);
             aux.splice(k, 0, v);
@@ -900,7 +926,7 @@ class Corridor {
           if (d < -SIM_BACK - 150 || d > SIM_AHEAD + 250) { out = true; }
         }
         // 유출 램프에서 빠져나감 (부가차로에 있고 노즈를 지났을 때)
-        if (!out && isFinite(v.exitS) && li === this.nLane && v.s >= v.exitS && v.s < v.exitS + 60) {
+        if (!out && isFinite(v.exitS) && li === this.nLane && v.s >= v.exitS - 2 && v.s < v.exitS + 120) {
           out = true;
           const r = this.offRamps.find(o => Math.abs(o.s - v.exitS) < 1);
           if (r) { r.taken++; exitedHere = r; }

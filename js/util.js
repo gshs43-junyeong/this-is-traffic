@@ -136,6 +136,14 @@ function simplifyDP(xs, ys, tol) {
   return out;
 }
 
+/** 정수 해시 (0..1). 스테이션마다 결정론적인 얼룩을 낼 때 쓴다 */
+function ihash(n) {
+  let h = (n | 0) * 374761393;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return (h >>> 8) / 16777216;
+}
+
 /* ---------- 서식 ---------- */
 const fmt0 = (n) => Math.round(n).toLocaleString('ko-KR');
 const fmt1 = (n) => (Math.round(n * 10) / 10).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });

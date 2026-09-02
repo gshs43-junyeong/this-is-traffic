@@ -550,7 +550,7 @@ class Road {
     while (s < this.len - 2600) {
       // 구조물 밖, 경사·곡률이 완만한 자리를 근처에서 찾는다
       let bi = -1, bScore = Infinity;
-      const j0 = Math.round(520 / ds), j1 = Math.round(880 / ds);
+      const j0 = Math.round(520 / ds), j1 = Math.round(1220 / ds);
       for (let d = -1700; d <= 1700; d += 40) {
         const ss = s + d;
         if (ss < 1400 || ss > this.len - 1800) continue;

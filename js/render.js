@@ -283,7 +283,7 @@ const Scene = {
     while (s < s1) {
       stations.push(s);
       const d = Math.abs(s - sc.sCam);
-      s += d < 70 ? 3 : d < 170 ? 6 : d < 380 ? 12 : d < 700 ? 24 : 40;
+      s += d < 60 ? 4 : d < 170 ? 7 : d < 380 ? 13 : d < 700 ? 26 : 42;
     }
     stations.push(Math.min(s1, rd.len - 0.01));
 
@@ -415,7 +415,11 @@ const Scene = {
     }
 
     // ---- 포장 ----
-    const road = this.haze(pal.road, dist);
+    /* 스테이션 3 m 마다 아스팔트 명도를 아주 조금 흔든다. 폴리곤을 더 쓰지 않고도
+       노면이 흘러가 보여, 속도가 눈에 읽힌다 — 주행감에 가장 크게 기여하는 부분이다. */
+    const cell = Math.floor(a.sRoad / 3);
+    const mot = dist < 260 ? 0.94 + ihash(cell) * 0.12 : 1;
+    const road = this.haze(shade(pal.road, mot), dist);
     const shoulder = this.haze(shade(pal.road, 0.86), dist);
     const median = this.haze(shade(pal.road, 0.78), dist);
     this.quad(this.pt(a, a.bIn, 0), this.pt(b, b.bIn, 0), this.pt(b, b.aIn, 0), this.pt(a, a.aIn, 0), median);
@@ -486,33 +490,108 @@ const Scene = {
       this.ptZ(b, fb, this.terrAt(b, fb)), this.ptZ(a, fa, this.terrAt(a, fa)), gc);
   },
 
-  /* ---------- 노면표시 ---------- */
+  /* ---------- 노면표시 ----------
+     점선을 스트립 경계가 아니라 '실제 스테이션'에서 끊는다. 예전처럼 스트립 하나를
+     통째로 칠하면 멀리서는 긴 흰 띠가 되어 속도가 전혀 읽히지 않았다. */
   markings(ctx, a, b, dist, sc) {
-    const lw = RoadStd.laneW, pal = this.pal;
-    const white = this.haze(sc.timeOfDay === 'night' ? '#e9e9e0' : '#f0f0ea', dist);
+    const lw = RoadStd.laneW;
+    const night = sc.timeOfDay === 'night';
+    const white = this.haze(night ? '#eceade' : '#f2f2ec', dist);
     const dz = 0.012;
-    const line = (u0a, u0b, w) => {
-      this.quad(this.pt(a, u0a - w / 2, dz), this.pt(b, u0b - w / 2, dz),
-        this.pt(b, u0b + w / 2, dz), this.pt(a, u0a + w / 2, dz), white);
+    const span = b.sRoad - a.sRoad;
+    const L3 = (A, B, t) => [lerp(A[0], B[0], t), lerp(A[1], B[1], t), lerp(A[2], B[2], t)];
+
+    /** 실선 */
+    const solid = (uA, uB, w) => {
+      this.quad(this.pt(a, uA - w / 2, dz), this.pt(b, uB - w / 2, dz),
+        this.pt(b, uB + w / 2, dz), this.pt(a, uA + w / 2, dz), white);
     };
-    // 차도 외측선(갓길 경계) — 실선 0.20 m
-    line(a.aAux, b.aAux, 0.20);
-    line(a.bAux, b.bAux, 0.20);
-    // 중앙분리대 쪽 차선 (좌측 차도외측선)
-    line(a.aIn + RoadStd.shL, b.bIn * 0 + b.aIn + RoadStd.shL, 0.18);
-    line(a.bIn - RoadStd.shL, b.bIn - RoadStd.shL, 0.18);
-    // 차로 경계 — 점선 (칠 10 m + 빈 10 m)
-    const painted = (Math.floor(a.sRoad / 10) & 1) === 0;
-    if (painted) {
-      for (let i = 1; i < a.nA + (a.auxA > 0.5 ? 1 : 0); i++) {
-        const ua = a.aLane0 + lw * i, ub = b.bLane0 * 0 + b.aLane0 + lw * i;
-        if (ua > a.aAux - 0.4) continue;
-        line(ua, ub, 0.15);
+    /** 점선 — 칠 PAINT m + 빈 (PERIOD-PAINT) m 를 스테이션 기준으로 끊어 그린다 */
+    const PERIOD = 20, PAINT = 10;
+    const dash = (uA, uB, w) => {
+      if (span <= 0) return;
+      const iL = this.pt(a, uA - w / 2, dz), iR = this.pt(a, uA + w / 2, dz);
+      const jL = this.pt(b, uB - w / 2, dz), jR = this.pt(b, uB + w / 2, dz);
+      let k = Math.floor(a.sRoad / PERIOD);
+      while (k * PERIOD < b.sRoad) {
+        const p0 = Math.max(a.sRoad, k * PERIOD), p1 = Math.min(b.sRoad, k * PERIOD + PAINT);
+        k++;
+        if (p1 <= p0) continue;
+        const t0 = (p0 - a.sRoad) / span, t1 = (p1 - a.sRoad) / span;
+        Render.begin();
+        const q0 = L3(iL, jL, t0), q1 = L3(iL, jL, t1), q2 = L3(iR, jR, t1), q3 = L3(iR, jR, t0);
+        Render.add(q0[0], q0[1], q0[2]); Render.add(q1[0], q1[1], q1[2]);
+        Render.add(q2[0], q2[1], q2[2]); Render.add(q3[0], q3[1], q3[2]);
+        Render.fill(white);
       }
-      for (let i = 1; i < a.nB + (a.auxB > 0.5 ? 1 : 0); i++) {
-        const ua = a.bLane0 - lw * i, ub = b.bLane0 - lw * i;
-        if (ua < a.bAux + 0.4) continue;
-        line(ua, ub, 0.15);
+    };
+
+    // 차도 외측선(갓길 경계)과 중앙분리대 쪽 외측선 — 실선
+    solid(a.aAux, b.aAux, 0.20);
+    solid(a.bAux, b.bAux, 0.20);
+    solid(a.aIn + RoadStd.shL, b.aIn + RoadStd.shL, 0.18);
+    solid(a.bIn - RoadStd.shL, b.bIn - RoadStd.shL, 0.18);
+
+    // 차로 경계 — 점선
+    for (let i = 1; i < a.nA + (a.auxA > 0.5 ? 1 : 0); i++) {
+      const ua = a.aLane0 + lw * i, ub = b.aLane0 + lw * i;
+      if (ua > a.aAux - 0.4) continue;
+      dash(ua, ub, 0.15);
+    }
+    for (let i = 1; i < a.nB + (a.auxB > 0.5 ? 1 : 0); i++) {
+      const ua = a.bLane0 - lw * i, ub = b.bLane0 - lw * i;
+      if (ua < a.bAux + 0.4) continue;
+      dash(ua, ub, 0.15);
+    }
+
+    if (dist > 80) return;
+
+    // ---- 가까운 곳만: 노면 이음매 · 캣츠아이 · 갓길 요철 ----
+    const seamZ = 0.006;
+    // 포장 이음매 — 12 m 마다 옅은 가로줄. 값싼 광학 흐름이다
+    const seamC = this.haze(shade(this.pal.road, 0.86), dist);
+    let k = Math.floor(a.sRoad / 12);
+    while (k * 12 < b.sRoad) {
+      const ss = k * 12; k++;
+      if (ss < a.sRoad || span <= 0) continue;
+      const t = (ss - a.sRoad) / span;
+      const wA = this.pt(a, a.aIn, seamZ), wB = this.pt(b, b.aIn, seamZ);
+      const eA = this.pt(a, a.aSh, seamZ), eB = this.pt(b, b.aSh, seamZ);
+      const p0 = L3(wA, wB, t), p1 = L3(eA, eB, t);
+      const t2 = Math.min(1, t + 0.36 / Math.max(span, 0.5));
+      const p2 = L3(eA, eB, t2), p3 = L3(wA, wB, t2);
+      this.quad(p0, p1, p2, p3, seamC);
+    }
+    // 캣츠아이 — 차로 경계 위 16 m 간격. 야간·터널에서 특히 잘 읽힌다
+    const eye = night ? '#ffe9a8' : '#dfe0d8';
+    if (!night && dist > 55) return;
+    let e = Math.floor(a.sRoad / 16);
+    while (e * 16 < b.sRoad) {
+      const ss = e * 16; e++;
+      if (ss < a.sRoad || span <= 0) continue;
+      const t = (ss - a.sRoad) / span;
+      for (let i = 1; i < a.nA; i++) {
+        const u = a.aLane0 + lw * i;
+        if (u > a.aAux - 0.4) continue;
+        const A = this.pt(a, u - 0.09, 0.03), B = this.pt(b, u - 0.09, 0.03);
+        const C = this.pt(a, u + 0.09, 0.03), D = this.pt(b, u + 0.09, 0.03);
+        const t2 = Math.min(1, t + 0.5 / Math.max(span, 0.5));
+        this.quad(L3(A, B, t), L3(C, D, t), L3(C, D, t2), L3(A, B, t2), eye);
+      }
+    }
+    // 갓길 요철 포장 — 차로를 벗어나면 이 줄무늬가 빠르게 스친다
+    if (dist < 46) {
+      const rum = this.haze(shade(this.pal.road, 0.72), dist);
+      let r = Math.floor(a.sRoad / 2.4);
+      while (r * 2.4 < b.sRoad) {
+        const ss = r * 2.4; r++;
+        if (ss < a.sRoad || span <= 0) continue;
+        const t = (ss - a.sRoad) / span, t2 = Math.min(1, t + 0.4 / Math.max(span, 0.5));
+        for (const [uA, uB] of [[a.aAux + 0.35, b.aAux + 0.35]]) {
+          const A = this.pt(a, uA - 0.3, 0.008), B = this.pt(b, uB - 0.3, 0.008);
+          const C = this.pt(a, uA + 0.3, 0.008), D = this.pt(b, uB + 0.3, 0.008);
+          this.quad(L3(A, B, t), L3(C, D, t), L3(C, D, t2), L3(A, B, t2), rum);
+        }
       }
     }
   },
@@ -532,9 +611,14 @@ const Scene = {
     const needL = brg || a.g.z - a.dayLz > 3.0;
     const beam = this.haze('#b9b9b4', dist);
     const rail = (u) => {
-      const s = sgn(u) * 0.06;
-      this.quad(this.pt(a, u, 0.52), this.pt(b, u, 0.52), this.pt(b, u, 0.78), this.pt(a, u, 0.78), beam);
-      if (lod >= 2) this.quad(this.pt(a, u - s, 0.78), this.pt(b, u - s, 0.78), this.pt(b, u, 0.80), this.pt(a, u, 0.80), top);
+      // 레일 두 줄
+      this.quad(this.pt(a, u, 0.50), this.pt(b, u, 0.50), this.pt(b, u, 0.62), this.pt(a, u, 0.62), beam);
+      this.quad(this.pt(a, u, 0.68), this.pt(b, u, 0.68), this.pt(b, u, 0.80), this.pt(a, u, 0.80), top);
+      // 지주 — 가까운 곳에서만 4 m 간격. 스치는 기둥이 속도를 읽게 한다
+      if (dist < 70 && Math.floor(a.sRoad / 4) !== Math.floor(b.sRoad / 4)) {
+        const w = 0.07;
+        this.quad(this.pt(a, u - w, 0), this.pt(a, u + w, 0), this.pt(a, u + w, 0.80), this.pt(a, u - w, 0.80), dark);
+      }
     };
     if (needR) rail(a.aSh + 0.5);
     if (needL) rail(a.bSh - 0.5);
@@ -812,6 +896,7 @@ const Scene = {
   },
 
   vehicle(ctx, v, corr, sc) {
+    if (v.isPlayer && sc.hidePlayer) return;   // 운전석 시점 — 카메라가 차 안에 있다
     const rd = this.road;
     const sRoad = corr.roadS(v.s);
     const g = rd.at(sRoad);
@@ -836,9 +921,9 @@ const Scene = {
     const cxx = bx - ch * p.len * 0.5, cyy = by - sh * p.len * 0.5;
 
     // 그림자
-    if (dist < 240) {
-      const hl = p.len * 0.48, hw = p.wid * 0.55;
-      ctx.globalAlpha = 0.24;
+    if (dist < 260) {
+      const hl = p.len * 0.47, hw = p.wid * 0.45;
+      ctx.globalAlpha = 0.42;
       Render.begin();
       for (const [ix, iy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
         Render.add(cxx + ch * hl * ix - sh * hw * iy, cyy + sh * hl * ix + ch * hw * iy, bz + 0.015);
@@ -851,12 +936,18 @@ const Scene = {
     const wheelCol = '#141619';
     /* 바퀴는 차체보다 '나중에' 그려야 한다. 먼저 그리면 차체 옆면이 통째로 덮어 버려
        바퀴가 사라진다. 차체 바깥면에 살짝 걸치도록 붙인다. */
+    /* 앞바퀴는 조향각만큼 돌려 그린다. 바퀴가 안 돌면 조향이 숫자만 바뀌는 느낌이 난다.
+       pairs 의 첫 항목을 앞축으로 본다. */
+    const steerAng = v.isPlayer ? -(v.steer || 0) * 0.42 : clamp((v.yawRel || 0) * 1.8, -0.35, 0.35);
     const putWheels = (ox, halfW, r, pairs) => {
       if (!near) return;
-      for (const px of pairs) {
+      for (let pi = 0; pi < pairs.length; pi++) {
+        const px = pairs[pi];
+        const wh = hdg + (pi === 0 ? steerAng : 0);
+        const cw = Math.cos(wh), sw = Math.sin(wh);
         for (const side of [-1, 1]) {
           const wx = ox.x + ch * px - sh * halfW * side, wy = ox.y + sh * px + ch * halfW * side;
-          this.box(ctx, wx, wy, bz, hdg, r * 2.05, 0.24, r * 2, 0, wheelCol, 1, dist);
+          this.box(ctx, wx, wy, bz, hdg, r * 2.05, 0.24, r * 2, 0, wheelCol, 1, dist, false, wh);
         }
       }
     };
@@ -895,7 +986,8 @@ const Scene = {
   },
 
   /** 직육면체 — 뒷면을 제거하고 깊이순으로 칠한다. 바퀴·적재함처럼 각진 부분에 쓴다 */
-  box(ctx, cx, cy, cz, hdg, len, wid, hei, zBase, color, alpha, dist, skipTop) {
+  box(ctx, cx, cy, cz, hdg, len, wid, hei, zBase, color, alpha, dist, skipTop, ownHdg) {
+    if (ownHdg != null) hdg = ownHdg;
     const ch = Math.cos(hdg), sh = Math.sin(hdg);
     const hl = len / 2, hw = wid / 2;
     const c = [];
@@ -950,15 +1042,25 @@ const Scene = {
     const size = clamp(70 / dist, 0.8, 9);
     for (const side of (facing < 0 ? [-1, 1] : [])) {
       const lx = rearX - sh * hw * side, ly = rearY + ch * hw * side;
-      const q = Render.point(lx, ly, bz + zT);
-      if (!q) continue;
-      ctx.fillStyle = tail;
-      ctx.fillRect(q.x - size * 0.55, q.y - size * 0.32, size * 1.1, size * 0.64);
-      if (v.brake && dist < 160) {
-        const r = size * 2.6;
-        const gr = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
-        gr.addColorStop(0, '#ff5a4088'); gr.addColorStop(1, '#ff5a4000');
-        ctx.fillStyle = gr; ctx.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+      if (dist < 90) {
+        // 가까이에서는 실제 면적을 가진 등화로 그린다 — 점으로 찍으면 제동이 안 읽힌다
+        const hwl = 0.26, hh = 0.10;
+        const nx = -sh, ny = ch;
+        const P = (dy, dz) => [lx + nx * dy - ch * 0.02, ly + ny * dy - sh * 0.02, bz + zT + dz];
+        this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), tail);
+      } else {
+        const q = Render.point(lx, ly, bz + zT);
+        if (!q) continue;
+        ctx.fillStyle = tail;
+        ctx.fillRect(q.x - size * 0.55, q.y - size * 0.32, size * 1.1, size * 0.64);
+      }
+      if (v.brake && dist < 180) {
+        const q2 = Render.point(lx, ly, bz + zT);
+        if (!q2) continue;
+        const r = Math.max(size, 3) * 2.8;
+        const gr = ctx.createRadialGradient(q2.x, q2.y, 0, q2.x, q2.y, r);
+        gr.addColorStop(0, '#ff4a30aa'); gr.addColorStop(1, '#ff4a3000');
+        ctx.fillStyle = gr; ctx.fillRect(q2.x - r, q2.y - r, r * 2, r * 2);
       }
     }
     // 방향지시등
