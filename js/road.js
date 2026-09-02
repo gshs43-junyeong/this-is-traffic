@@ -111,8 +111,8 @@ function makeTerrain(seed, t) {
   const den = clamp(t.density / 100, 0, 1);
   const rug = clamp(t.ruggedness / 100, 0, 1);
 
-  const ampBase = 16 + 96 * rel;                 // 산줄기 진폭 16 ~ 112 m
-  const ampRidge = 12 + 92 * rel;                // 마루 높이 12 ~ 104 m
+  const ampBase = 14 + 178 * rel;                // 산줄기 진폭 14 ~ 192 m
+  const ampRidge = 10 + 168 * rel;               // 마루 높이 10 ~ 178 m
   // 밀도가 높을수록 마루로 판정되는 문턱이 내려가 산이 촘촘해진다
   const ridgeThr = 0.40 - 0.34 * den;
   // 험준할수록 문턱에서 정상까지의 폭이 좁아 사면이 급해진다
@@ -121,7 +121,7 @@ function makeTerrain(seed, t) {
   const fMain = 1 / (4200 - 2000 * den);
   const fRidge = 1 / (2000 - 1050 * den);
   const valleyW = 0.070 - 0.045 * rug;           // 계곡 폭
-  const valleyD = 16 + 40 * rel * (0.5 + 0.5 * rug);
+  const valleyD = 14 + 78 * rel * (0.4 + 0.6 * rug);
 
   return function (x, y) {
     let z = nA(x, y, fMain, 4, 0.5) * ampBase;                       // 산줄기
@@ -129,8 +129,9 @@ function makeTerrain(seed, t) {
     z += rg * rg * (3 - 2 * rg) * ampRidge;                          // 마루
     // 이차 능선 — 큰 산의 어깨에서 갈라져 나온 줄기. 지형을 덜 단조롭게 한다
     const rg2 = clamp((nE(x, y, fRidge * 2.4, 2, 0.5) - 0.16) / 0.24, 0, 1);
-    z += rg2 * rg2 * (3 - 2 * rg2) * ampRidge * 0.30 * (0.4 + 0.6 * rug);
-    z += nC(x, y, 1 / 240, 2, 0.5) * (2.0 + 4.5 * rug);              // 잔주름
+    z += rg2 * rg2 * (3 - 2 * rg2) * ampRidge * 0.34 * (0.35 + 0.65 * rug);
+    z += nC(x, y, 1 / 240, 2, 0.5) * (2.0 + 9.0 * rug);              // 잔주름
+    z += nC(y * 0.7 - 400, x * 0.7 + 900, 1 / 90, 2, 0.5) * (0.8 + 3.4 * rug);  // 미세 요철
     // 하천 계곡: 저주파 노이즈의 영점선을 따라 좁고 깊은 골을 판다
     const v = nD(x, y, 1 / 1700, 2, 0.5);
     const ch = clamp(1 - Math.abs(v) / valleyW, 0, 1);
@@ -151,6 +152,7 @@ class Road {
     this.tcfg = Object.assign({}, TerrainDefault, opt.terrain || {});
     this.P = roadParamsFor(this.tcfg);          // 지형에서 유도한 설계 상수
     this.tunnelSep = opt.tunnelSep != null ? opt.tunnelSep : 26;  // 쌍굴 이격 (m)
+    this.icSpacing = opt.icSpacing != null ? opt.icSpacing : 6000; // 인터체인지 평균 간격 (m)
     this.terrain = makeTerrain(this.seed, this.tcfg);
 
     this._horizontal();
@@ -462,31 +464,35 @@ class Road {
      그 사이는 완화구간에서 부드럽게 벌렸다 좁힌다. */
   _separation() {
     const n = this.n, ds = this.ds;
-    const sep = new Float32Array(n);
     const half = this.tunnelSep / 2;
+    const sep = new Float32Array(n);
+    // 완화구간 길이. smoothstep 의 최대 기울기는 1.5·half/T 이므로
+    // 1:40 보다 완만해지도록 T 를 잡는다.
+    const T = clamp(half * 60, 260, 1100);
     for (const st of this.structs) {
       if (st.type !== 'tunnel') continue;
-      const a = clamp(Math.round(st.s0 / ds), 0, n - 1);
-      const b = clamp(Math.round(st.s1 / ds), 0, n - 1);
-      for (let i = a; i <= b; i++) sep[i] = half;
+      const a = st.s0, b = st.s1;
+      const j0 = clamp(Math.floor((a - T) / ds), 0, n - 1);
+      const j1 = clamp(Math.ceil((b + T) / ds), 0, n - 1);
+      for (let j = j0; j <= j1; j++) {
+        const x = j * ds;
+        let f;
+        if (x < a) f = smoothstep((x - (a - T)) / T);
+        else if (x <= b) f = 1;
+        else f = smoothstep(((b + T) - x) / T);
+        const v = half * clamp(f, 0, 1);
+        if (v > sep[j]) sep[j] = v;          // 터널이 가까이 붙어 있으면 큰 쪽을 쓴다
+      }
     }
-    // 완화구간 — 이격을 벌리는 데 쓰는 거리. 1:35 정도의 완만한 테이퍼가 되도록 잡는다
-    const trans = Math.max(1, Math.round((half * 35) / ds));
-    this.sep = smoothArray(sep, trans);
-    // 평활 후 터널 안쪽은 다시 정확히 일정하게 되돌린다 (사용자 요구: 일정한 이격)
-    for (const st of this.structs) {
-      if (st.type !== 'tunnel') continue;
-      const a = clamp(Math.round((st.s0 + 25) / ds), 0, n - 1);
-      const b = clamp(Math.round((st.s1 - 25) / ds), 0, n - 1);
-      for (let i = a; i <= b; i++) this.sep[i] = half;
+    this.sep = sep;
+    // 이격의 변화율 — 각 차도의 진행방향이 중심선과 어긋나는 각을 여기서 얻는다.
+    // 이 각을 반영하지 않으면 차가 옆으로 게걸음을 친다.
+    const grad = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+      grad[i] = (sep[b] - sep[a]) / ((b - a) * ds);
     }
-    this.sep = smoothArray(this.sep, Math.max(1, Math.round(40 / ds)));
-    for (const st of this.structs) {
-      if (st.type !== 'tunnel') continue;
-      const a = clamp(Math.round((st.s0 + 60) / ds), 0, n - 1);
-      const b = clamp(Math.round((st.s1 - 60) / ds), 0, n - 1);
-      for (let i = a; i <= b; i++) this.sep[i] = half;
-    }
+    this.sepGrad = grad;
   }
 
   /** 이 지점에서 중심선부터 각 차도 안쪽 가장자리까지의 거리 */
@@ -540,7 +546,7 @@ class Road {
     const rng = new RNG(this.seed * 104729 + 11);
     const ds = this.ds;
     this.ics = [];
-    let s = rng.range(2400, 3800);
+    let s = rng.range(1800, this.icSpacing * 0.7);
     while (s < this.len - 2600) {
       // 구조물 밖, 경사·곡률이 완만한 자리를 근처에서 찾는다
       let bi = -1, bScore = Infinity;
@@ -567,7 +573,7 @@ class Road {
           rest,
         });
       }
-      s += rng.range(4200, 7600);
+      s += this.icSpacing * rng.range(0.62, 1.42);   // 간격은 매번 임의로
     }
     // 이름 중복 제거
     const seen = new Set();
@@ -611,6 +617,7 @@ class Road {
       struct: this.struct[i],
       // 차도 안쪽 가장자리까지의 거리 (터널에서는 쌍굴 이격만큼 벌어진다)
       med: RoadStd.medHalf + (this.sep ? lerp(this.sep[i], this.sep[j], f) : 0),
+      medGrad: this.sepGrad ? lerp(this.sepGrad[i], this.sepGrad[j], f) : 0,
     };
   }
   idxOf(s) { return clamp(Math.round(s / this.ds), 0, this.n - 1); }

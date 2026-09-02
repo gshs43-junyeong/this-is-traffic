@@ -16,7 +16,7 @@ const UI = {
     this.app = app;
     const ids = ['hud', 'spd', 'spdUnit', 'gaugeArc', 'limitSign', 'stn', 'nextIC', 'gradeV', 'curveV',
       'structV', 'laneV', 'losV', 'kV', 'qV', 'vV', 'delayV', 'ttiV', 'nvehV', 'clockV', 'msg',
-      'panel', 'stats', 'fdCv', 'stCv', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList'];
+      'panel', 'stats', 'fdCv', 'stCv', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList', 'incbox'];
     for (const id of ids) this.el[id] = document.getElementById(id);
     this.bindControls();
     this.toastT = 0;
@@ -68,6 +68,7 @@ const UI = {
       case 'seed': return '#' + v;
       case 'relief': case 'density': case 'ruggedness': return fmt0(v);
       case 'tunnelSep': return fmt0(v) + ' m';
+      case 'icSpacing': return fmt1(v / 1000) + ' km 간격';
       default: return '' + v;
     }
   },
@@ -143,7 +144,8 @@ const UI = {
           ' · ' + (d > 0 ? '전방 ' + distStr(d) : '후방 ' + distStr(-d)) +
           ' · 해제까지 ' + mmss(inc.t) + '</li>');
       }
-      this.el.incList.innerHTML = rows.length ? rows.join('') : '<li class="none">진행 중인 돌발상황 없음</li>';
+      this.el.incList.innerHTML = rows.length ? rows.join('') : '';
+      this.el.incbox.style.display = rows.length ? '' : 'none';
     }
   },
 

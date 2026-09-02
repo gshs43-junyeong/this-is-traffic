@@ -75,6 +75,10 @@ const DT = 0.04;                 // 물리 적분 간격 (s)
 const NOISE_K = Math.sqrt(2 * DT / 6);   // OU 잡음 확산항 계수 (tau = 6 s)
 const U_LERP = 1 - Math.exp(-DT / 0.62);  // 횡방향 접근 계수
 const HIST = 48;                 // 지각지연용 이력 버퍼 길이 (48 * 0.04 = 1.92 s)
+const RAMP_LEN = 340;            // 램프 연장 (m)
+const RAMP_OFF = 33;             // 램프 종점의 본선 이격 (m)
+const SIM_BACK = 1100;           // 플레이어 뒤로 계산할 거리 (m)
+const SIM_AHEAD = 3200;          // 플레이어 앞으로 계산할 거리 (m)
 
 let _vid = 1;
 
@@ -98,6 +102,7 @@ class Vehicle {
     this.eta = 0; this.relax = 0; this.blink = 0; this.lcCool = 0; this.decide = rng.next() * 0.4;
     this.exitS = Infinity; this.t0 = 0; this.s0enter = 0;
     this.obstacle = false; this.isPlayer = false; this.brake = 0; this.alive = true;
+    this.dz = 0; this.rampT = 0;
     this.hn = 0; this.hs.fill(0); this.hv.fill(0);
     this.missed = false; this.onRamp = null; this.rs = 0;
     this.courteous = rng.chance(0.72);      // 양보하는 운전자 비율
@@ -216,7 +221,30 @@ class Corridor {
   }
   nLaneAt(s) { return this.nLane + (this.auxAt(s) ? 1 : 0); }
 
-  /* ---------- 램프 ---------- */
+  /* ---------- 램프 ----------
+     노즈(gore)에서 t 만큼 떨어진 지점의 횡거와 높이차.
+     처음 80 m 는 1:16 테이퍼로 갈라지고, 그 뒤로는 일정 곡률(2차 곡선)로 벌어진다.
+     실제 다이아몬드형 인터체인지의 진출입로가 이 모양이다. */
+  /* 램프 평면선형. 노즈에서 1:14 로 떨어져 나가 점점 크게 휘는 3차 곡선이다.
+     구간을 나눠 이어 붙이면 이음매에서 기울기가 튀어 꺾여 보이므로,
+     전 구간을 하나의 매끄러운(C1) 식으로 둔다. */
+  rampLat(t) {
+    const base = this.laneU(this.nLane);
+    if (t <= 0) return base;
+    const x = Math.min(t / RAMP_LEN, 1.15);
+    return base + RAMP_OFF * (0.74 * x + 0.26 * x * x * x);
+  }
+  /* 램프 종단은 본선보다 아주 조금만 내려간다. 크게 내리면 주변 지형에 묻혀
+     화면에서 사라진다 — 실제로도 인터체인지 근처는 완만하게 붙인다. */
+  rampDz(t) {
+    if (t <= 0) return 0;
+    const x = Math.min(t / RAMP_LEN, 1.15);
+    return -1.5 * x * x;
+  }
+  /** 본선 갓길 바깥 가장자리 (램프가 여기서부터 모습을 드러낸다) */
+  outerEdge() { return RoadStd.shL + RoadStd.laneW * this.nLane + RoadStd.shR; }
+  get rampLen() { return RAMP_LEN; }
+
   buildRamps() {
     this.onRamps = []; this.offRamps = [];
     for (const ic of this.icLocal) {
@@ -225,7 +253,7 @@ class Corridor {
         s: ic.s + 380, name: ic.name, queue: [], len: 320, wait: 0, served: 0, rejected: 0,
         auxEnd: acc ? acc.s1 : ic.s + 700, qDelay: 0,
       });
-      this.offRamps.push({ s: ic.s, name: ic.name, taken: 0 });
+      this.offRamps.push({ s: ic.s, name: ic.name, taken: 0, out: [] });
     }
   }
 
@@ -329,6 +357,16 @@ class Corridor {
   /* =========================== 스텝 =========================== */
   step(dt, player) {
     this.time += dt;
+    // 계산 대상 구간을 플레이어를 따라 옮기고, 새로 드러난 앞쪽을 목표 밀도로 채운다
+    if (this.focusS != null) {
+      const w = this.window();
+      if (this.filledTo == null) this.filledTo = w[1];
+      if (w[1] > this.filledTo + 60) {
+        this.fillRange(Math.max(this.filledTo, w[0]), w[1], 600);
+        this.filledTo = w[1];
+      }
+      if (w[1] < this.filledTo) this.filledTo = w[1];
+    }
     const dSteps = Math.round(this.cfg.reactionTime / DT);
 
     // 1) 배열 정렬 및 인덱스 갱신
@@ -668,6 +706,66 @@ class Corridor {
     v.exitS = Infinity;
   }
 
+  /** 모의 대상 구간 — 플레이어 주변만 계산한다 */
+  window() {
+    const f = this.focusS != null ? this.focusS : 0;
+    return [Math.max(0, f - SIM_BACK), Math.min(this.L, f + SIM_AHEAD)];
+  }
+
+  /* 시작하자마자 설정한 밀도가 보이도록 창 안을 미리 채운다.
+     시간으로 채우면 40 km 를 메우는 데 20분 넘게 걸려서, 출발할 때 앞이 텅 빈다.
+     자유류 평형 차두로 깔아 둔 뒤 짧게 돌려 IDM 이 자리를 잡게 한다. */
+  prefill(maxVeh) {
+    const w = this.window();
+    const n = this.fillRange(w[0], w[1], maxVeh || 4000);
+    this.filledTo = w[1];
+    return n;
+  }
+
+  /** [s0, s1] 구간을 목표 밀도로 채운다 */
+  fillRange(s0, s1, cap) {
+    const q = this.demandNow();
+    if (q <= 0 || s1 <= s0) return 0;
+    let placed = 0;
+    const minLane = this.heavyMinLane();
+    const heavyLanes = Math.max(1, this.nLane - minLane);
+    // 중차량이 갈 수 있는 차로에만 몰아 넣되, 전체 구성비는 유지되게 비율을 키운다
+    const heavyBoost = this.nLane / heavyLanes;
+    const perLane = q / this.nLane;
+    const meanHw = 3600 / Math.max(perLane, 1);          // 평균 차두시간 (s)
+
+    for (let li = 0; li < this.nLane; li++) {
+      const arr = this.lanes[li];
+      let s = s0 + this.rng.range(5, 90);
+      while (s < s1 && placed < cap) {
+        let cls = this.pickClass();
+        if (VCLASS[cls].heavy) {
+          if (li < minLane || !this.rng.chance(Math.min(1, heavyBoost))) cls = 'car';
+        }
+        const v = this.newVehicle(cls);
+        const j = this.jOf(s);
+        const vDes = Math.min(v.v0own, v.v0lim, this.capA[j]) * this.multA[j];
+        v.s = s; v.v = vDes * this.rng.range(0.94, 1.0);
+        v.lane = li; v.laneT = li;
+        v.u = v.uT = this.laneU(li);
+        v.t0 = this.time; v.s0enter = s;
+        for (let h = 0; h < HIST; h++) { v.hs[h] = v.s - v.v * (HIST - h) * DT; v.hv[h] = v.v; }
+        this.assignExit(v, s);
+        arr.splice(this.seek(arr, s), 0, v);
+        placed++;
+        // 다음 차까지의 거리 — 포아송 도착을 거리로 환산하고 최소 안전 차두를 지킨다
+        const minGap = v.len + v.p.s0 + v.v * v.Tbase * 0.85;
+        s += Math.max(minGap, v.v * this.rng.exp(meanHw));
+      }
+    }
+    for (let li = 0; li < this.lanes.length; li++) {
+      insertionSortByS(this.lanes[li]);
+      for (let k = 0; k < this.lanes[li].length; k++) this.lanes[li][k].idx = k;
+    }
+    this.entered += placed;
+    return placed;
+  }
+
   spawn(dt) {
     const q = this.demandNow();
     if (q <= 0) return;
@@ -677,21 +775,24 @@ class Corridor {
     // 상류 경계에서 넣을 수 있는 차로를 고른다 — 앞 간격이 가장 넉넉한 곳
     const cls = this.pickClass();
     const v = this.newVehicle(cls);
+    // 유입 경계는 창의 뒤쪽 끝이다 — 플레이어를 따라 함께 움직인다
+    const bnd = this.window()[0];
     let best = -1, bestGap = -Infinity, bestLead = null;
     const minLane = v.p.heavy ? this.heavyMinLane() : 0;
     for (let i = minLane; i < this.nLane; i++) {
       const arr = this.lanes[i];
-      const lead = arr[0] || null;
-      const gap = lead ? lead.s - lead.len : 1e5;
+      const k = this.seek(arr, bnd);
+      const lead = arr[k] || null;
+      const gap = lead ? lead.s - lead.len - bnd : 1e5;
       if (gap > bestGap) { bestGap = gap; best = i; bestLead = lead; }
     }
     const vDes = Math.min(v.v0own, v.v0lim);
     // 경계에 자리가 없으면 상류(음의 station)에 붙여 대기행렬을 만든다.
     // 수요가 용량을 넘으면 여기에 줄이 서고, 그 길이가 곧 상류 지체다.
     const need = v.p.s0 + vDes * v.Tbase * 0.55 + 1.5;
-    let sIns = 0;
-    if (bestLead && bestLead.s - bestLead.len < need) sIns = bestLead.s - bestLead.len - need;
-    if (best < 0 || sIns < -1200) { this.pool.push(v); this.rejected++; this.queueUp++; return; }
+    let sIns = bnd;
+    if (bestLead && bestLead.s - bestLead.len - bnd < need) sIns = bestLead.s - bestLead.len - need;
+    if (best < 0 || sIns < bnd - 1200) { this.pool.push(v); this.rejected++; this.queueUp++; return; }
     v.s = sIns; v.lane = best; v.laneT = best;
     v.u = v.uT = this.laneU(best);
     v.v = Math.min(vDes, bestLead ? Math.max(bestLead.v, 8) : vDes);
@@ -714,9 +815,10 @@ class Corridor {
       if (r.wait <= 0) {
         r.wait += this.rng.exp(3600 / Math.max(qRamp / Math.max(this.onRamps.length, 1), 1e-6));
         const v = this.newVehicle(this.pickClass());
-        v.rs = 0; v.v = 55 * KMH; v.t0 = this.time; v.onRamp = r;
+        v.rs = 0; v.v = 52 * KMH; v.t0 = this.time; v.onRamp = r;
         v.s = r.s - r.len; v.lane = this.nLane; v.laneT = this.nLane;
-        v.u = v.uT = this.laneU(this.nLane) + 5.0;
+        v.rampT = r.len;
+        v.u = v.uT = this.rampLat(r.len); v.dz = this.rampDz(r.len);
         for (let h = 0; h < HIST; h++) { v.hs[h] = v.s; v.hv[h] = v.v; }
         r.queue.push(v);
       }
@@ -741,7 +843,9 @@ class Corridor {
         v.a = acc;
         const vn = v.v + acc * dt;
         if (vn < 0) { v.v = 0; } else { v.s += (v.v + 0.5 * acc * dt) * dt; v.v = vn; }
-        v.u = approach(v.u, this.laneU(this.nLane) + Math.max(0, (r.s - v.s) / r.len) * 5.0, 0.5, dt);
+        const tr = Math.max(0, r.s - v.s);
+        v.u = this.rampLat(tr); v.dz = this.rampDz(tr);
+        v.rampT = tr;
         v.pushHist();
         if (v.s >= r.s) {
           // 본선 가속차로로 진입
@@ -750,7 +854,7 @@ class Corridor {
           const nose = aux[k] || null, back = aux[k - 1] || null;
           if ((!nose || nose.s - v.s - nose.len > 3) && (!back || v.s - back.s - v.len > 3)) {
             r.queue.splice(i, 1);
-            v.onRamp = null; v.relax = 1; v.s0enter = v.s;
+            v.onRamp = null; v.relax = 1; v.s0enter = v.s; v.dz = 0; v.rampT = 0;
             v.lane = this.nLane; v.laneT = this.nLane; v.uT = this.laneU(this.nLane);
             aux.splice(k, 0, v);
             this.assignExit(v, v.s);
@@ -759,6 +863,25 @@ class Corridor {
         }
       }
       r.qDelay += r.queue.length * dt;
+    }
+    // 진출 램프 — 빠져나간 차를 램프 끝까지 굴려 보낸다.
+    // 노즈에서 그냥 사라지면 통행이 어수선해 보인다.
+    for (const o of this.offRamps) {
+      for (let i = o.out.length - 1; i >= 0; i--) {
+        const v = o.out[i];
+        const lead = o.out[i + 1] || null;
+        const v0 = Math.min(v.v0own, 72 * KMH);
+        let acc;
+        if (lead) acc = idmAccel(v.v, v0, lead.s - v.s - lead.len, v.v - lead.v, v.p.a * v.aggr, v.Tbase, v.p.s0, v.sqrtAB);
+        else { const x = clamp(v.v / v0, 0, 3); acc = v.p.a * v.aggr * (1 - x * x * x * x); }
+        v.a = clamp(acc, -6, 3);
+        const vn = v.v + v.a * dt;
+        if (vn < 0) v.v = 0; else { v.s += (v.v + 0.5 * v.a * dt) * dt; v.v = vn; }
+        const t = Math.max(0, v.s - o.s);
+        v.u = this.rampLat(t); v.dz = this.rampDz(t); v.rampT = t;
+        v.pushHist();
+        if (t > this.rampLen) { o.out.splice(i, 1); v.alive = false; if (this.pool.length < 2500) this.pool.push(v); }
+      }
     }
   }
 
@@ -769,18 +892,31 @@ class Corridor {
       for (let j = arr.length - 1; j >= 0; j--) {
         const v = arr[j];
         if (v.obstacle) continue;
-        let out = false;
+        let out = false, exitedHere = null;
         if (v.s >= this.L - 5) out = true;
+        // 창 밖으로 벗어난 차는 지운다 (플레이어 뒤로 멀어졌거나 너무 앞서 나간 차)
+        if (!out && !v.isPlayer && this.focusS != null) {
+          const d = v.s - this.focusS;
+          if (d < -SIM_BACK - 150 || d > SIM_AHEAD + 250) { out = true; }
+        }
         // 유출 램프에서 빠져나감 (부가차로에 있고 노즈를 지났을 때)
         if (!out && isFinite(v.exitS) && li === this.nLane && v.s >= v.exitS && v.s < v.exitS + 60) {
           out = true;
-          const r = this.offRamps.find(o => Math.abs(o.s - v.exitS) < 1); if (r) r.taken++;
+          const r = this.offRamps.find(o => Math.abs(o.s - v.exitS) < 1);
+          if (r) { r.taken++; exitedHere = r; }
         }
         if (!out && isFinite(v.exitS) && v.s > v.exitS + 80) { v.missed = true; v.exitS = Infinity; }
         if (out) {
           if (!v.isPlayer) this.record(v);
           arr.splice(j, 1);
-          if (v.isPlayer) { v.s = 0; v.t0 = this.time; arr.splice(0, 0, v); continue; }  // 플레이어는 순환
+          // 인터체인지로 빠지는 차는 램프 위에서 계속 달리게 넘긴다
+          if (!v.isPlayer && exitedHere) {
+            v.lane = -1; v.dz = 0; v.rampT = 0;
+            exitedHere.out.push(v);
+            exitedHere.out.sort((a, b) => a.s - b.s);
+            continue;
+          }
+          if (v.isPlayer) { v.s = 0; v.t0 = this.time; this.playerWrapped = true; arr.splice(0, 0, v); continue; }
           v.alive = false;
           if (this.pool.length < 2500) this.pool.push(v);
         }
@@ -924,7 +1060,11 @@ class Corridor {
   /* ---------- 조회 ---------- */
   count() { let n = 0; for (const arr of this.lanes) for (const v of arr) if (!v.obstacle) n++; return n; }
   /** 상류 경계에 밀려 대기 중인 차량 수 */
-  upstreamQueue() { let n = 0; for (const arr of this.lanes) for (const v of arr) { if (v.obstacle) continue; if (v.s < 0) n++; } return n; }
+  upstreamQueue() {
+    const bnd = this.window()[0];
+    let n = 0; for (const arr of this.lanes) for (const v of arr) { if (v.obstacle) continue; if (v.s < bnd) n++; }
+    return n;
+  }
   /** 특정 위치 주변의 교통 상태 (밀도 veh/km/차로, 평균속도) */
   localState(s, win) {
     win = win || 500;

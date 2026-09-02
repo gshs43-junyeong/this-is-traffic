@@ -4,7 +4,9 @@
 'use strict';
 
 const CFG_DEFAULT = {
-  seed: 20260902, length: 20000, lanes: 3,
+  seed: 20260902, length: 40000, lanes: 3,
+  icSpacing: 5500,     // 인터체인지 평균 간격 (m) — 실제 간격은 여기서 ±40% 로 흔들린다
+  endless: true,       // 구간 끝에 닿으면 새 지형을 이어서 만든다
   demand: 1500,        // 대/시/차로 (상류 유입 수요)
   truckPct: 10, busPct: 5,
   rampPct: 12,         // 본선 수요 대비 램프 진입 비율
@@ -44,6 +46,7 @@ const App = {
     addEventListener('resize', () => this.resize());
     this.resize();
     this.last = performance.now();
+    setTimeout(() => { const k = document.getElementById('keys'); if (k) k.classList.add('fade'); }, 14000);
     requestAnimationFrame((t) => this.loop(t));
   },
 
@@ -63,14 +66,17 @@ const App = {
     this.road = new Road({
       seed: c.seed | 0, length: c.length,
       terrain: { relief: c.relief, density: c.density, ruggedness: c.ruggedness },
-      tunnelSep: c.tunnelSep,
+      tunnelSep: c.tunnelSep, icSpacing: c.icSpacing,
     });
     this.corrA = new Corridor(this.road, 1, c, (c.seed | 0) * 7 + 1);
     this.corrB = c.twoWay ? new Corridor(this.road, -1, c, (c.seed | 0) * 7 + 2) : null;
     this.simTime = 0; this.dirty = false;
     this.makePlayer();
-    // 시작할 때 도로가 텅 비어 있지 않도록 3분치를 미리 돌린다
-    this.warm(180);
+    // 내 차 주변을 설정한 밀도로 미리 깔고, 짧게 돌려 자리를 잡게 한다
+    this.corrA.focusS = this.player.s;
+    if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
+    this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
+    this.warm(30);
     UI.toast(this.roadSummary(), 5);
   },
   roadSummary() {
@@ -115,7 +121,27 @@ const App = {
   /** 재생성 없이 즉시 반영되는 설정 */
   applyLive(key) {
     if (key === 'weather') { this.corrA.rebuildCaps(); if (this.corrB) this.corrB.rebuildCaps(); }
+    if (key === 'lanes' || key === 'twoWay') this.rebuildTraffic();
     if (key === 'timeOfDay' || key === 'view') { /* 렌더러가 매 프레임 읽는다 */ }
+  },
+
+  /** 도로는 그대로 두고 교통만 다시 세운다 — 차로 수를 즉시 바꿀 수 있다 */
+  rebuildTraffic() {
+    const c = this.cfg;
+    const keepS = this.player ? this.player.s : 400;
+    const keepV = this.player ? this.player.v : 80 * KMH;
+    this.corrA = new Corridor(this.road, 1, c, (c.seed | 0) * 7 + 1);
+    this.corrB = c.twoWay ? new Corridor(this.road, -1, c, (c.seed | 0) * 7 + 2) : null;
+    this.makePlayer();
+    this.player.s = clamp(keepS, 100, this.corrA.L - 400);
+    this.player.v = keepV;
+    const arr = this.corrA.lanes[this.player.lane];
+    const k = arr.indexOf(this.player); if (k >= 0) arr.splice(k, 1);
+    arr.splice(this.corrA.seek(arr, this.player.s), 0, this.player);
+    this.corrA.focusS = this.player.s;
+    if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
+    this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
+    this.warm(25);
   },
 
   /* ---------- 프리셋 ---------- */
@@ -207,10 +233,11 @@ const App = {
     const left = K['a'] || K['arrowleft'], right = K['d'] || K['arrowright'];
     const hard = K[' '];
 
-    p.throttle = approach(p.throttle, up ? 1 : 0, 0.18, dt);
-    p.brakeIn = approach(p.brakeIn, (down ? 1 : 0) || (hard ? 1 : 0), 0.10, dt);
+    p.throttle = approach(p.throttle, up ? 1 : 0, 0.14, dt);
+    p.brakeIn = approach(p.brakeIn, (down ? 1 : 0) || (hard ? 1 : 0), 0.08, dt);
     const steerIn = (right ? 1 : 0) - (left ? 1 : 0);
-    p.steer = approach(p.steer, steerIn, 0.13, dt);
+    // 꺾을 때는 빠르게, 놓을 때는 조금 더 빠르게 돌아온다 (셀프 얼라이닝)
+    p.steer = approach(p.steer, steerIn, steerIn ? 0.085 : 0.055, dt);
 
     const pp = p.p, grade = c.gradeAt(p.s);
     // 종방향
@@ -218,6 +245,7 @@ const App = {
     a += pp.powEff / Math.max(p.v, 4) * p.throttle;
     a -= MU[cfg.weather] * GRAV * p.brakeIn * (hard ? 1 : 0.82);
     a -= pp.CrG + pp.dragK * p.v * p.v + GRAV * grade;
+    if (p.throttle < 0.05 && p.brakeIn < 0.05) a -= 0.45;      // 엔진 브레이크
     if (p.offRoad) a -= 1.6;                         // 갓길·노면 밖 저항
     if (p.crashT > 0) a -= 6;
     p.a = clamp(a, -MU[cfg.weather] * GRAV, 4.5);
@@ -228,7 +256,7 @@ const App = {
     // 횡방향 — 곡선 좌표계 자전거 모델
     const g = c.geo(p.s);
     const kap = g.kap * c.dir;                        // 진행방향 기준 곡률
-    const aLatMax = 5.2;
+    const aLatMax = 6.4;
     const tanMax = p.v > 3 ? clamp(aLatMax * WB / (p.v * p.v), 0.004, 0.55) : 0.55;
     const delta = Math.atan(-p.steer * tanMax);       // 오른쪽 입력 = 시계방향
     let dEps = p.v * Math.tan(delta) / WB - kap * p.v * Math.cos(p.eps);
@@ -239,8 +267,9 @@ const App = {
       const nl = c.nLaneAt(p.s);
       const li = clamp(Math.round((p.u - RoadStd.shL) / RoadStd.laneW - 0.5), 0, nl - 1);
       const err = c.laneU(li) - p.u;                 // + 면 왼쪽으로 가야 한다
-      const epsWant = clamp(-err * 0.16, -0.10, 0.10) - 0;
-      dEps += (epsWant - p.eps) * 1.9;
+      // 곡선을 놓쳐 밀려나지 않을 만큼만 거든다. 너무 세면 레일 위를 달리는 느낌이 된다.
+      const epsWant = clamp(-err * 0.11, -0.075, 0.075);
+      dEps += (epsWant - p.eps) * 1.15;
     } else if (!steerIn) {
       dEps += (0 - p.eps) * 0.8;
     }
@@ -306,8 +335,8 @@ const App = {
   /* ---------- 카메라 ---------- */
   updateCam(dt) {
     const p = this.player, c = this.corrA, rd = this.road, view = this.cfg.view;
-    const back = view === 'cockpit' ? 0.35 : view === 'chase' ? 12.5 : 30;
-    const up = view === 'cockpit' ? 1.24 : view === 'chase' ? 3.7 : 16;
+    const back = view === 'cockpit' ? 0.35 : view === 'chase' ? 10.5 : 30;
+    const up = view === 'cockpit' ? 1.24 : view === 'chase' ? 3.0 : 16;
     const sC = p.s - back;
     const g = c.geo(sC);
     const u = c.dir > 0 ? (g.med + p.u) : -(g.med + p.u);
@@ -315,11 +344,15 @@ const App = {
     const tx = g.x + nx * u * (view === 'high' ? 0.5 : 1);
     const ty = g.y + ny * u * (view === 'high' ? 0.5 : 1);
     const tz = g.z + rd.crossZ(g, u) + up;
-    const yawT = g.hdg + (c.dir > 0 ? 0 : Math.PI) + (view === 'cockpit' ? p.eps * 0.85 : p.eps * 0.35);
+    // 조향한 쪽을 조금 먼저 본다 — 굽이를 미리 읽게 되어 조작이 붙는다
+    const look = (view === 'cockpit' ? 0.85 : 0.35) * p.eps + (view === 'high' ? 0 : 0.10 * (p.steer || 0));
+    const yawT = g.hdg + (c.dir > 0 ? 0 : Math.PI) + look;
     // 앞쪽 도로의 종단경사를 보고 시선을 맞춘다
     const ahead = c.geo(Math.min(p.s + 70, c.L - 1));
     const pitchT = Math.atan2((ahead.z - g.z), 70) * (view === 'high' ? 0.4 : 1) - (view === 'high' ? 0.30 : 0.028);
-    const rollT = (view === 'cockpit' ? -g.e * 0.75 : -g.e * 0.35) * c.dir;
+    // 편경사에 더해, 횡가속만큼 차체가 기운다
+    const aLat = p.v * p.v * Math.abs(g.kap) * sgn(g.kap) * c.dir;
+    const rollT = (view === 'cockpit' ? -g.e * 0.75 : -g.e * 0.35) * c.dir + clamp(aLat * 0.012, -0.10, 0.10);
 
     const cam = this.cam;
     if (!this.camInit) { cam.x = tx; cam.y = ty; cam.z = tz; cam.yaw = yawT; cam.pitch = pitchT; cam.roll = rollT; this.camInit = true; }
@@ -328,6 +361,16 @@ const App = {
     cam.yaw += wrapPi(yawT - cam.yaw) * (1 - Math.exp(-dt / (view === 'cockpit' ? 0.05 : 0.13)));
     cam.pitch = approach(cam.pitch, pitchT, 0.18, dt);
     cam.roll = approach(cam.roll, rollT, 0.22, dt);
+    // 속도에 따라 화각을 넓혀 속도감을 준다
+    const fovT = (view === 'cockpit' ? 56 : 55) + 15 * clamp(p.v / 58, 0, 1);
+    this.fov = approach(this.fov || fovT, fovT, 0.5, dt);
+    Render.fov = this.fov * Math.PI / 180;
+    // 노면 진동 — 빠를수록, 갓길에서는 더 크게
+    const buzz = (p.v / 62) * (p.offRoad ? 3.2 : 0.5) * (view === 'cockpit' ? 1 : 0.45);
+    if (buzz > 0.02) {
+      cam.pitch += (Math.random() - 0.5) * 0.0016 * buzz;
+      cam.roll += (Math.random() - 0.5) * 0.0022 * buzz;
+    }
     // 충돌 흔들림
     this.shake = Math.max(0, (this.shake || 0) - dt * 1.8);
     if (this.shake > 0) {
@@ -350,11 +393,23 @@ const App = {
       if (this.auto) this.player.offRoad = false;
       while (this.acc >= DT && n < 16) {
         if (!this.auto) this.drivePlayer(DT);
+        // 계산 대상 구간을 내 차 위치에 맞춘다
+        this.corrA.focusS = this.player.s;
+        if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
         this.corrA.step(DT, this.player);
         if (this.corrB) this.corrB.step(DT, { auto: true });
         this.simTime += DT; this.acc -= DT; n++;
       }
       if (this.acc > DT * 20) this.acc = 0;
+      // 구간 끝에 닿으면 새 시드로 지형을 다시 짜 이어 달린다
+      if (this.cfg.endless && this.corrA.playerWrapped) {
+        this.corrA.playerWrapped = false;
+        this.cfg.seed = (this.cfg.seed * 1103515245 + 12345) >>> 8;
+        const keepV = this.player.v;
+        this.rebuild();
+        this.player.v = keepV;
+        UI.toast('새 구간 — ' + this.roadSummary(), 5);
+      }
       this.updateCam(dt);
     }
 

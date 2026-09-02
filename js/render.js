@@ -226,6 +226,26 @@ const Scene = {
     s.dayR = Math.max(rd.dayR[i], s.aSh + 2); s.dayRz = rd.dayRz[i];
     s.dayL = -Math.max(rd.dayL[i], -s.bSh + 2); s.dayLz = rd.dayLz[i];
     s.hw = Math.max(s.aSh, -s.bSh) + 1.2;      // 산체·갱구 계산용 반폭
+    // 이 단면에 램프가 걸쳐 있으면 그 경계를 적어 둔다.
+    // 본선 비탈면을 여기서 끊지 않으면 비탈면이 램프를 덮어 버린다.
+    s.rampR = null; s.rampL = null; s.nearIC = false;
+    const AR = this.activeRamps;
+    if (AR) {
+      for (let i = 0; i < AR.length; i++) {
+        const e = AR[i], corr = e.corr;
+        const sl = corr.dir > 0 ? sRoad : corr.L - sRoad;
+        const t = e.on ? (e.s - sl) : (sl - e.s);
+        if (t < -260 || t > corr.rampLen + 260) continue;
+        s.nearIC = true;
+        // 노즈 앞뒤 여유 구간에서도 경계를 기록해 둔다. 여기서 끊지 않으면
+        // 가까운 스트립의 넓은 비탈면이 저 앞의 램프를 덮어 버린다.
+        const tc = clamp(t, 2, corr.rampLen);
+        const inU = Math.max(corr.rampLat(tc) - 3.3, corr.outerEdge() + 0.15);
+        const outU = corr.rampLat(tc) + 3.3 + 1.6;
+        if (corr.dir > 0) s.rampR = { in: m + inU, out: m + outU };
+        else s.rampL = { in: -(m + inU), out: -(m + outU) };
+      }
+    }
     return s;
   },
   /** 단면상의 월드 좌표 */
@@ -276,9 +296,21 @@ const Scene = {
         for (let j = 0; j < arr.length; j++) this.bucket(buckets, stations, corr, arr[j], sc);
       }
       for (const r of corr.onRamps) for (const v of r.queue) this.bucket(buckets, stations, corr, v, sc);
+      for (const o of corr.offRamps) for (const v of o.out) this.bucket(buckets, stations, corr, v, sc);
       for (const inc of corr.incidents) if (inc.veh && inc.lane < 0) this.bucket(buckets, stations, corr, inc.veh, sc);
     };
     addVeh(sc.corrA); addVeh(sc.corrB);
+
+    // 이 프레임에 보일 램프만 미리 추린다 (스트립마다 전수 검사하면 프레임을 깎아먹는다)
+    const near = [];
+    for (const corr of [sc.corrA, sc.corrB]) {
+      if (!corr) continue;
+      const sCamL = corr.dir > 0 ? sc.sCam : corr.L - sc.sCam;
+      const lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
+      for (const r of corr.onRamps) if (r.s > lo && r.s - corr.rampLen < hi) near.push({ corr, s: r.s, on: 1 });
+      for (const o of corr.offRamps) if (o.s + corr.rampLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
+    }
+    this.activeRamps = near;
 
     // 단면 미리 계산
     const secs = new Array(stations.length);
@@ -307,7 +339,7 @@ const Scene = {
     const g = rd.at(sRoad);
     const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
-    const d = Render.depth(g.x + nx * u, g.y + ny * u, g.z + 1);
+    const d = Render.depth(g.x + nx * u, g.y + ny * u, g.z + 1 + (v.dz || 0));
     if (d < 0.5) return;
     (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d, g, u });
   },
@@ -339,17 +371,46 @@ const Scene = {
         // 비탈면 + 그 바깥 지형
         // 비탈면은 6 m 넘게 깎아낸 자리만 암반색으로 두고, 나머지는 초지로 덮는다
         const slopeCol = (dz) => this.haze(dz > 6 ? mixHex(pal.grass, pal.rock, clamp((dz - 6) / 12, 0, 0.85)) : pal.grass, dist);
-        const aE = this.pt(a, a.aSh, 0), bE = this.pt(b, b.aSh, 0);
-        const aD = this.ptZ(a, a.dayR, a.dayRz), bD = this.ptZ(b, b.dayR, b.dayRz);
-        this.quad(aE, bE, bD, aD, slopeCol(a.dayRz - a.g.z));
-        const aF = this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), bF = this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90));
-        this.quad(aD, bD, bF, aF, gc);
+        // 오른쪽 — 램프가 있으면 램프 안쪽 경계에서 멈춘다
+        const rIn = (a.rampR || b.rampR) ? Math.min((a.rampR || b.rampR).in, (b.rampR || a.rampR).in) - 0.2 : null;
+        const dRa = rIn != null ? Math.min(a.dayR, rIn) : a.dayR;
+        const dRb = rIn != null ? Math.min(b.dayR, rIn) : b.dayR;
+        const zRa = rIn != null && dRa < a.dayR ? a.g.z : a.dayRz;
+        const zRb = rIn != null && dRb < b.dayR ? b.g.z : b.dayRz;
+        this.quad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
+          this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z));
+        if (rIn == null) {
+          this.quad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
+            this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90)),
+            this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), gc);
+        } else {
+          // 램프 바깥쪽 지면 — 램프 노면 끝에서 다시 이어 붙인다
+          const oA = (a.rampR || b.rampR).out, oB = (b.rampR || a.rampR).out;
+          for (const [w0, w1] of [[2, 40], [40, 150]]) {
+            this.quad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
+              this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), gc);
+          }
+        }
 
-        const aE2 = this.pt(a, a.bSh, 0), bE2 = this.pt(b, b.bSh, 0);
-        const aD2 = this.ptZ(a, a.dayL, a.dayLz), bD2 = this.ptZ(b, b.dayL, b.dayLz);
-        this.quad(aE2, bE2, bD2, aD2, slopeCol(a.dayLz - a.g.z));
-        const aF2 = this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), bF2 = this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90));
-        this.quad(aD2, bD2, bF2, aF2, gc);
+        // 왼쪽 — 반대편 차도의 램프도 같은 방식으로
+        const lIn = (a.rampL || b.rampL) ? Math.max((a.rampL || b.rampL).in, (b.rampL || a.rampL).in) + 0.2 : null;
+        const dLa = lIn != null ? Math.max(a.dayL, lIn) : a.dayL;
+        const dLb = lIn != null ? Math.max(b.dayL, lIn) : b.dayL;
+        const zLa = lIn != null && dLa > a.dayL ? a.g.z : a.dayLz;
+        const zLb = lIn != null && dLb > b.dayL ? b.g.z : b.dayLz;
+        this.quad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
+          this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z));
+        if (lIn == null) {
+          this.quad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
+            this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
+            this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), gc);
+        } else {
+          const oA = (a.rampL || b.rampL).out, oB = (b.rampL || a.rampL).out;
+          for (const [w0, w1] of [[2, 40], [40, 150]]) {
+            this.quad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
+              this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), gc);
+          }
+        }
       }
     }
 
@@ -365,10 +426,64 @@ const Scene = {
     this.quad(this.pt(a, a.bIn, 0), this.pt(b, b.bIn, 0), this.pt(b, b.bAux, 0), this.pt(a, a.bAux, 0), road);
     this.quad(this.pt(a, a.bAux, 0), this.pt(b, b.bAux, 0), this.pt(b, b.bSh, 0), this.pt(a, a.bSh, 0), shoulder);
 
+    this.rampSurf(ctx, a, b, dist, sc);
     if (lod >= 1) this.markings(ctx, a, b, dist, sc);
     this.barriers(ctx, a, b, dist, lod, brg, tun, sc);
     if (brg) this.bridge(ctx, a, b, dist);
     if (tun || a.st === 2 || b.st === 2) this.tunnel(ctx, a, b, dist, sc);
+  },
+
+  /* ---------- 램프 노면 ----------
+     본선에서 갈라져 나가는 진입·진출로를 실제로 그린다.
+     이게 없으면 차가 허공에서 나타나 합류하는 것처럼 보인다. */
+  rampSurf(ctx, a, b, dist, sc) {
+    const list = this.activeRamps;
+    if (!list || !list.length) return;
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i], corr = e.corr, L = corr.L;
+      const sa = corr.dir > 0 ? a.sRoad : L - a.sRoad;
+      const sb = corr.dir > 0 ? b.sRoad : L - b.sRoad;
+      if (e.on) this.rampSeg(ctx, a, b, dist, corr, e.s - sa, e.s - sb, sc);
+      else this.rampSeg(ctx, a, b, dist, corr, sa - e.s, sb - e.s, sc);
+    }
+  },
+  /** 노즈로부터의 거리 ta, tb 사이의 램프 한 토막.
+      노즈 부근에서는 램프가 아직 본선 갓길과 겹쳐 있으므로, 안쪽 경계를
+      갓길 바깥선에 물려 두고 폭이 생기는 곳부터만 그린다. */
+  rampSeg(ctx, a, b, dist, corr, ta, tb, sc) {
+    const LEN = corr.rampLen;
+    if ((ta < 2 && tb < 2) || (ta > LEN && tb > LEN)) return;
+    const t0 = clamp(ta, 2, LEN), t1 = clamp(tb, 2, LEN);
+    if (Math.abs(t0 - t1) < 0.01) return;
+    const hw = 3.3, sh = 1.6, edge = corr.outerEdge() + 0.15;
+    const inA = Math.max(corr.rampLat(t0) - hw, edge), outA = corr.rampLat(t0) + hw;
+    const inB = Math.max(corr.rampLat(t1) - hw, edge), outB = corr.rampLat(t1) + hw;
+    if (outA - inA < 0.4 && outB - inB < 0.4) return;
+    const pal = this.pal;
+    const road = this.haze(pal.road, dist);
+    const shoulder = this.haze(shade(pal.road, 0.86), dist);
+    const white = this.haze(sc.timeOfDay === 'night' ? '#e9e9e0' : '#f0f0ea', dist);
+    const P = (sec, u, t) => {
+      const uw = corr.dir > 0 ? (sec.g.med + u) : -(sec.g.med + u);
+      const g = sec.g, nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
+      return [g.x + nx * uw, g.y + ny * uw, g.z + this.road.crossZ(g, uw) + corr.rampDz(t)];
+    };
+    // 포장 + 바깥 갓길
+    this.quad(P(a, inA, t0), P(b, inB, t1), P(b, outB, t1), P(a, outA, t0), road);
+    this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
+    if (dist < 520) {
+      for (const off of [0.22, -0.22]) {
+        const iA = off > 0 ? inA + off : outA + off, iB = off > 0 ? inB + off : outB + off;
+        this.quad(P(a, iA - 0.09, t0), P(b, iB - 0.09, t1), P(b, iB + 0.09, t1), P(a, iA + 0.09, t0), white);
+      }
+    }
+    // 램프 바깥 비탈면 — 주변 지형 높이까지 자연스럽게 내린다
+    const gc = this.haze(pal.grass, dist);
+    const oa = corr.dir > 0 ? (a.g.med + outA + sh) : -(a.g.med + outA + sh);
+    const ob = corr.dir > 0 ? (b.g.med + outB + sh) : -(b.g.med + outB + sh);
+    const fa = oa + (corr.dir > 0 ? 14 : -14), fb = ob + (corr.dir > 0 ? 14 : -14);
+    this.quad(P(a, outA + sh, t0), P(b, outB + sh, t1),
+      this.ptZ(b, fb, this.terrAt(b, fb)), this.ptZ(a, fa, this.terrAt(a, fa)), gc);
   },
 
   /* ---------- 노면표시 ---------- */
@@ -424,7 +539,7 @@ const Scene = {
     if (needR) rail(a.aSh + 0.5);
     if (needL) rail(a.bSh - 0.5);
     // 시선유도표 (야간에 특히 눈에 띈다)
-    if (lod >= 2 && (Math.floor(a.sRoad / 20) !== Math.floor(b.sRoad / 20))) {
+    if (lod >= 2 && dist < 220 && (Math.floor(a.sRoad / 44) !== Math.floor(b.sRoad / 44))) {
       const col = sc.timeOfDay === 'night' ? '#ffe680' : '#e8e2c8';
       const post = (u) => {
         this.quad(this.pt(a, u, 0.55), this.pt(a, u, 0.55), this.pt(a, u, 1.0), this.pt(a, u, 1.0), col);
@@ -592,22 +707,22 @@ const Scene = {
     const L = p.len / 2, W = p.wid / 2;
     if (cls === 'car') {
       return [
-        [-L, W * 0.80, 0.34, 0.86],
-        [-L * 0.82, W * 0.96, 0.30, 1.06],
-        [-L * 0.52, W * 1.00, 0.28, 1.44],
-        [L * 0.02, W * 1.00, 0.28, 1.47],
-        [L * 0.34, W * 0.99, 0.28, 1.24],
-        [L * 0.72, W * 0.94, 0.30, 0.98],
-        [L, W * 0.82, 0.36, 0.90],
+        [-L, W * 0.80, 0.46, 0.88],
+        [-L * 0.82, W * 0.96, 0.42, 1.08],
+        [-L * 0.52, W * 1.00, 0.40, 1.45],
+        [L * 0.02, W * 1.00, 0.40, 1.48],
+        [L * 0.34, W * 0.99, 0.40, 1.26],
+        [L * 0.72, W * 0.94, 0.42, 1.00],
+        [L, W * 0.82, 0.48, 0.92],
       ];
     }
     if (cls === 'bus') {
       return [
-        [-L, W * 0.90, 0.52, 3.20],
-        [-L * 0.94, W * 1.00, 0.48, 3.34],
-        [L * 0.90, W * 1.00, 0.48, 3.34],
-        [L * 0.98, W * 0.94, 0.50, 3.10],
-        [L, W * 0.86, 0.54, 2.80],
+        [-L, W * 0.90, 0.68, 3.24],
+        [-L * 0.94, W * 1.00, 0.64, 3.38],
+        [L * 0.90, W * 1.00, 0.64, 3.38],
+        [L * 0.98, W * 0.94, 0.66, 3.14],
+        [L, W * 0.86, 0.70, 2.84],
       ];
     }
     return null;   // 화물차는 트랙터 + 트레일러로 따로 만든다
@@ -626,7 +741,7 @@ const Scene = {
     const camLeft = -sh * dx + ch * dy > 0;          // 카메라가 차 왼쪽에 있는가
     const nearSign = camLeft ? 1 : -1;               // 가까운 옆면의 부호
     const farSign = -nearSign;
-    const gc = glassBand ? this.haze(shade('#1d2128', 0.72 * amb + 0.28), dist) : null;
+    const gc = glassBand ? this.haze(shade('#262b34', 0.75 * amb + 0.25), dist) : null;
 
     const sideQuads = (A, B, sgn) => {
       const col = tone(sgn === nearSign ? 0.78 : 0.66);
@@ -636,9 +751,20 @@ const Scene = {
       const ha = A[3] - glassBand.h, hb = B[3] - glassBand.h;
       if (A[3] - A[2] < glassBand.min || B[3] - B[2] < glassBand.min) return;
       if (ha <= A[2] + 0.06 || hb <= B[2] + 0.06) return;
+      // 캐빈(지붕이 높은 구간)에만 유리를 두른다. 이 조건이 없으면 트렁크·보닛 옆면까지
+      // 검게 덮여 차가 속이 빈 상자처럼 보인다.
+      const top = glassBand.top || 0;
+      if (A[3] < top || B[3] < top) return;
       const ea = (A[1] + 0.012) * sgn, eb = (B[1] + 0.012) * sgn;
       this.quadPts(P(A[0], ea, ha), P(B[0], eb, hb), P(B[0], eb, B[3] - 0.07), P(A[0], ea, A[3] - 0.07), gc);
     };
+
+    // 바닥면 — 가장 먼저 깔아 차 밑으로 노면이 비치지 않게 한다
+    const floor = this.haze(shade(color, 0.30 * amb + 0.12), dist);
+    for (let i = 0; i < prof.length - 1; i++) {
+      const A = prof[i], B = prof[i + 1];
+      this.quadPts(P(A[0], -A[1], A[2]), P(B[0], -B[1], B[2]), P(B[0], B[1], B[2]), P(A[0], A[1], A[2]), floor);
+    }
 
     // 카메라 반대쪽 마구리 (거의 안 보이지만 실루엣의 빈틈을 막는다)
     const F = prof[prof.length - 1], Rr = prof[0];
@@ -690,9 +816,17 @@ const Scene = {
     const sRoad = corr.roadS(v.s);
     const g = rd.at(sRoad);
     const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
-    const hdg = g.hdg + (corr.dir > 0 ? 0 : Math.PI) + v.yawRel * corr.dir;
+    /* 차도가 벌어지는 구간(쌍굴 이격)과 램프에서는 진행방향이 중심선과 어긋난다.
+       차도 국소 좌표에서의 횡거 변화율 하나로 두 경우가 모두 정리된다:
+       진행각 보정 = -atan(du_local/ds_local).  (양방향 모두 같은 식) */
+    let gLocal = (corr.dir > 0 ? (g.medGrad || 0) : -(g.medGrad || 0));
+    if (v.rampT > 0) {
+      const dl = (corr.rampLat(v.rampT + 2) - corr.rampLat(v.rampT - 2)) / 4;
+      gLocal += v.onRamp ? -dl : dl;      // 진입로는 t 가 줄고, 진출로는 t 가 는다
+    }
+    const hdg = g.hdg + (corr.dir > 0 ? 0 : Math.PI) + v.yawRel * corr.dir - Math.atan(gLocal);
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
-    const bx = g.x + nx * u, by = g.y + ny * u, bz = g.z + rd.crossZ(g, u);
+    const bx = g.x + nx * u, by = g.y + ny * u, bz = g.z + rd.crossZ(g, u) + (v.dz || 0);
     const dist = Render.depth(bx, by, bz);
     if (dist < 0.4 || dist > Render.drawDist + 60) return;
 
@@ -713,14 +847,16 @@ const Scene = {
       ctx.globalAlpha = 1;
     }
 
-    const near = dist < 170;
+    const near = dist < 190;
     const wheelCol = '#141619';
-    const putWheels = (ox, len, halfW, r, pairs) => {
+    /* 바퀴는 차체보다 '나중에' 그려야 한다. 먼저 그리면 차체 옆면이 통째로 덮어 버려
+       바퀴가 사라진다. 차체 바깥면에 살짝 걸치도록 붙인다. */
+    const putWheels = (ox, halfW, r, pairs) => {
       if (!near) return;
       for (const px of pairs) {
         for (const side of [-1, 1]) {
           const wx = ox.x + ch * px - sh * halfW * side, wy = ox.y + sh * px + ch * halfW * side;
-          this.box(ctx, wx, wy, bz, hdg, r * 2.05, 0.26, r * 2, 0, wheelCol, 1, dist);
+          this.box(ctx, wx, wy, bz, hdg, r * 2.05, 0.24, r * 2, 0, wheelCol, 1, dist);
         }
       }
     };
@@ -730,8 +866,6 @@ const Scene = {
       const cabL = 5.8, gap = 1.0, trlL = p.len - cabL - gap;
       const c1 = { x: bx - ch * (cabL * 0.5), y: by - sh * (cabL * 0.5) };
       const c2 = { x: bx - ch * (cabL + gap + trlL * 0.5), y: by - sh * (cabL + gap + trlL * 0.5) };
-      putWheels(c2, trlL, p.wid * 0.43, 0.52, [-trlL * 0.34, -trlL * 0.34 + 1.4]);
-      putWheels(c1, cabL, p.wid * 0.43, 0.52, [cabL * 0.31, -cabL * 0.26]);
       const boxCol = mixHex(v.color, '#eef1f4', 0.45);
       const drawTrailer = () => {
         this.box(ctx, c2.x, c2.y, bz, hdg, trlL, p.wid, 3.05, 1.12, boxCol, 1, dist);
@@ -743,18 +877,18 @@ const Scene = {
         [cabL * 0.44, p.wid * 0.50, 0.88, 3.18],
         [cabL * 0.50, p.wid * 0.43, 0.92, 2.60],
       ];
-      const drawCab = () => this.hull(ctx, c1.x, c1.y, bz, hdg, cabProf, v.color, dist, near ? { h: 1.15, min: 1.4 } : null);
+      const drawCab = () => this.hull(ctx, c1.x, c1.y, bz, hdg, cabProf, v.color, dist, near ? { h: 1.00, min: 1.4, top: 2.9 } : null);
       // 먼 쪽부터 그린다 — 순서를 뒤집으면 뒤에 있어야 할 캡이 적재함을 덮어 버린다
       const camAheadT = ch * (Render.cx - bx) + sh * (Render.cy - by) > 0;
       if (camAheadT) { drawTrailer(); drawCab(); } else { drawCab(); drawTrailer(); }
+      putWheels(c2, p.wid * 0.47, 0.53, [-trlL * 0.34, -trlL * 0.34 + 1.4]);
+      putWheels(c1, p.wid * 0.47, 0.53, [cabL * 0.31, -cabL * 0.26]);
     } else if (v.cls === 'bus') {
-      const c = { x: cxx, y: cyy };
-      putWheels(c, p.len, p.wid * 0.43, 0.50, [p.len * 0.34, -p.len * 0.29]);
-      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('bus', p), v.color, dist, near ? { h: 1.45, min: 1.6 } : null);
+      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('bus', p), v.color, dist, near ? { h: 1.30, min: 1.6, top: 3.0 } : null);
+      putWheels({ x: cxx, y: cyy }, p.wid * 0.47, 0.53, [p.len * 0.34, -p.len * 0.29]);
     } else {
-      const c = { x: cxx, y: cyy };
-      putWheels(c, p.len, p.wid * 0.44, 0.33, [p.len * 0.31, -p.len * 0.30]);
-      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('car', p), v.color, dist, near ? { h: 0.50, min: 0.55 } : null);
+      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('car', p), v.color, dist, near ? { h: 0.34, min: 0.55, top: 1.18 } : null);
+      putWheels({ x: cxx, y: cyy }, p.wid * 0.435, 0.33, [p.len * 0.31, -p.len * 0.30]);
     }
 
     if (dist < 340) this.lights(ctx, v, corr, bx, by, bz, hdg, dist, sc);
@@ -780,6 +914,7 @@ const Scene = {
       { idx: [0, 1, 5, 4], n: [-ch, -sh, 0], sh: 0.62 },          // 뒷면
       { idx: [0, 2, 6, 4], n: [sh, -ch, 0], sh: 0.74 },           // 우측면
       { idx: [1, 3, 7, 5], n: [-sh, ch, 0], sh: 0.74 },           // 좌측면
+      { idx: [0, 1, 3, 2], n: [0, 0, -1], sh: 0.30 },             // 바닥면
     ];
     const amb = this.pal.amb;
     ctx.globalAlpha = alpha;
@@ -864,8 +999,8 @@ const Scene = {
       ctx.fillStyle = 'rgba(4,6,10,0.30)'; ctx.fillRect(0, 0, W, H);
     }
     // 비네트
-    const vg = ctx.createRadialGradient(W / 2, H * 0.52, H * 0.32, W / 2, H * 0.52, H * 0.95);
-    vg.addColorStop(0, '#00000000'); vg.addColorStop(1, '#00000055');
+    const vg = ctx.createRadialGradient(W / 2, H * 0.52, H * 0.45, W / 2, H * 0.52, H * 1.05);
+    vg.addColorStop(0, '#00000000'); vg.addColorStop(1, '#00000033');
     ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
   },
 

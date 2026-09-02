@@ -74,7 +74,10 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
   opacity:0;transition:.25s;pointer-events:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
 #toast.on{opacity:1;transform:translate(-50%,0)}
 
-#keys{position:absolute;left:20px;bottom:186px;font-size:11px;color:#6a7386;line-height:1.65}
+#keys{position:absolute;left:20px;bottom:186px;font-size:11px;color:#6a7386;line-height:1.65;
+  transition:opacity .8s}
+#keys.fade{opacity:.22}
+#keys:hover{opacity:1}
 #keys b{color:#98a2b5;font-weight:600}
 
 /* ================= 설정 패널 ================= */
@@ -147,7 +150,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
       <div class="row"><span class="k">경과</span><span class="v" id="clockV">0:00</span></div>
     </div>
 
-    <div id="incbox" class="card">
+    <div id="incbox" class="card" style="display:none">
       <h3 style="font-size:11px;color:var(--dim);margin-bottom:6px">돌발상황</h3>
       <ul id="incList"><li class="none">진행 중인 돌발상황 없음</li></ul>
     </div>
@@ -227,6 +230,9 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 
         <div class="sect">교통 조건 <span style="color:#69728a;font-weight:400">— 즉시 반영</span></div>
         <div class="grid">
+          <div class="fld"><label>차로 수 <span class="val"></span></label>
+            <input type="range" min="2" max="5" step="1" data-cfg="lanes" data-num="1" data-live="1">
+            <div class="hint">한 방향 기준. 바꾸면 그 자리에서 교통을 다시 세운다.</div></div>
           <div class="fld"><label>상류 유입 수요 <span class="val"></span></label>
             <input type="range" min="200" max="2600" step="50" data-cfg="demand" data-num="1" data-live="1">
             <div class="hint">차로당 시간교통량. 용량(약 2,000~2,200 대/시/차로)을 넘기면 상류에 대기행렬이 자란다.</div></div>
@@ -299,10 +305,16 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 
         <div class="sect">노선 <span style="color:#69728a;font-weight:400">— 재생성 필요</span></div>
         <div class="grid">
-          <div class="fld"><label>차로 수 <span class="val"></span></label>
-            <input type="range" min="2" max="5" step="1" data-cfg="lanes" data-num="1"></div>
+
           <div class="fld"><label>노선 연장 <span class="val"></span></label>
             <input type="range" min="8000" max="40000" step="1000" data-cfg="length" data-num="1"></div>
+          <div class="fld"><label>인터체인지 간격 <span class="val"></span></label>
+            <input type="range" min="2500" max="14000" step="500" data-cfg="icSpacing" data-num="1">
+            <div class="hint">평균값이다. 실제 간격은 매번 ±40% 로 흔들리고 이름도 그때그때 붙는다.</div></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbEnd" data-cfg="endless" data-live="1">
+            <div><label for="cbEnd">끝없이 이어 달리기</label>
+              <div class="hint">구간 끝에 닿으면 새 시드로 지형을 다시 짜 이어 달린다.</div></div></div>
           <div class="fld"><label>지형 시드 <span class="val"></span></label>
             <input type="range" min="1" max="9999" step="1" data-cfg="seed" data-num="1">
             <div class="hint">지형이 바뀌면 곡선·경사·교량·터널·인터체인지 위치가 모두 달라진다.</div></div>
