@@ -239,11 +239,13 @@ const Scene = {
         s.nearIC = true;
         // 노즈 앞뒤 여유 구간에서도 경계를 기록해 둔다. 여기서 끊지 않으면
         // 가까운 스트립의 넓은 비탈면이 저 앞의 램프를 덮어 버린다.
-        const tc = clamp(t, 2, corr.rampLen);
-        const inU = Math.max(corr.rampLat(tc) - 3.3, corr.outerEdge() + 0.15);
-        const outU = corr.rampLat(tc) + 3.3 + 1.6;
-        if (corr.dir > 0) s.rampR = { in: m + inU, out: m + outU };
-        else s.rampL = { in: -(m + inU), out: -(m + outU) };
+        const tc = clamp(t, 0, corr.rampLen);
+        const inU = corr.rampLat(tc) - corr.rampHalf(tc);
+        const outU = corr.rampLat(tc) + corr.rampHalf(tc) + 1.6;
+        // 지면 띠는 본선 갓길 바깥에서 시작해 램프 안쪽 경계에서 끝난다.
+        // 노즈 부근에서는 램프가 본선에 붙으므로 그 사이가 0 이 되고, 지면은 안 그려진다.
+        if (corr.dir > 0) s.rampR = { in: Math.max(m + inU, s.aSh + 0.8), out: m + outU };
+        else s.rampL = { in: Math.min(-(m + inU), s.bSh - 0.8), out: -(m + outU) };
       }
     }
     return s;
@@ -287,8 +289,9 @@ const Scene = {
     }
     stations.push(Math.min(s1, rd.len - 0.01));
 
-    // 차량을 스트립 구간별로 담는다
+    // 차량을 스트립 구간별로 담는다 (램프 위 차량은 따로 모아 나중에 그린다)
     const buckets = new Array(stations.length);
+    this.rampVeh = [];
     const addVeh = (corr) => {
       if (!corr) return;
       for (let li = 0; li < corr.lanes.length; li++) {
@@ -327,6 +330,23 @@ const Scene = {
         for (const e of bk) this.vehicle(ctx, e.v, e.corr, sc);
       }
     }
+
+    /* 램프는 본선을 다 그린 뒤에 따로 얹는다.
+       본선 비탈면은 폭이 150 m 나 되는 평면이라 깊이가 24~150 m 에 걸친다.
+       화가 알고리즘으로는 그 한 장과 저 앞의 램프 사이 순서를 맞출 수 없어서,
+       가까운 비탈면이 앞쪽 램프를 통째로 덮어 버린다.
+       인터체인지는 평탄하고 구조물이 없는 자리에만 놓이므로, 나중에 얹어도
+       지형에 가려야 할 것을 잘못 덮을 일이 없다. */
+    if (this.activeRamps && this.activeRamps.length) {
+      for (let i = stations.length - 2; i >= 0; i--) {
+        const d = Math.abs(stations[i] - sc.sCam);
+        this.rampSurf(ctx, secs[i], secs[i + 1], d, sc);
+      }
+      if (this.rampVeh.length) {
+        this.rampVeh.sort((p, q) => q.d - p.d);
+        for (const e of this.rampVeh) this.vehicle(ctx, e.v, e.corr, sc);
+      }
+    }
   },
 
   bucket(buckets, stations, corr, v, sc) {
@@ -341,7 +361,8 @@ const Scene = {
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
     const d = Render.depth(g.x + nx * u, g.y + ny * u, g.z + 1 + (v.dz || 0));
     if (d < 0.5) return;
-    (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d, g, u });
+    if (v.onRamp || v.lane === -1) this.rampVeh.push({ v, corr, d });
+    else (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d, g, u });
   },
 
   /* ---------- 한 스트립 ---------- */
@@ -377,8 +398,10 @@ const Scene = {
         const dRb = rIn != null ? Math.min(b.dayR, rIn) : b.dayR;
         const zRa = rIn != null && dRa < a.dayR ? a.g.z : a.dayRz;
         const zRb = rIn != null && dRb < b.dayR ? b.g.z : b.dayRz;
-        this.quad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
-          this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z));
+        if (dRa > a.aSh + 0.2 || dRb > b.aSh + 0.2) {
+          this.quad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
+            this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z));
+        }
         if (rIn == null) {
           this.quad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
             this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90)),
@@ -398,8 +421,10 @@ const Scene = {
         const dLb = lIn != null ? Math.max(b.dayL, lIn) : b.dayL;
         const zLa = lIn != null && dLa > a.dayL ? a.g.z : a.dayLz;
         const zLb = lIn != null && dLb > b.dayL ? b.g.z : b.dayLz;
-        this.quad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
-          this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z));
+        if (dLa < a.bSh - 0.2 || dLb < b.bSh - 0.2) {
+          this.quad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
+            this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z));
+        }
         if (lIn == null) {
           this.quad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
             this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
@@ -430,7 +455,6 @@ const Scene = {
     this.quad(this.pt(a, a.bIn, 0), this.pt(b, b.bIn, 0), this.pt(b, b.bAux, 0), this.pt(a, a.bAux, 0), road);
     this.quad(this.pt(a, a.bAux, 0), this.pt(b, b.bAux, 0), this.pt(b, b.bSh, 0), this.pt(a, a.bSh, 0), shoulder);
 
-    this.rampSurf(ctx, a, b, dist, sc);
     if (lod >= 1) this.markings(ctx, a, b, dist, sc);
     this.barriers(ctx, a, b, dist, lod, brg, tun, sc);
     if (brg) this.bridge(ctx, a, b, dist);
@@ -452,21 +476,23 @@ const Scene = {
     }
   },
   /** 노즈로부터의 거리 ta, tb 사이의 램프 한 토막.
-      노즈 부근에서는 램프가 아직 본선 갓길과 겹쳐 있으므로, 안쪽 경계를
-      갓길 바깥선에 물려 두고 폭이 생기는 곳부터만 그린다. */
+      노즈 쪽에서는 램프가 차로 하나 폭으로 좁아져 가감속차로와 그대로 이어진다.
+      예전처럼 안쪽 경계를 갓길 바깥선에 고정하면, 노즈 앞 60 m 가 실 한 가닥으로
+      줄었다 사라져 도로가 끊긴 것처럼 보였다. */
   rampSeg(ctx, a, b, dist, corr, ta, tb, sc) {
     const LEN = corr.rampLen;
-    if ((ta < 2 && tb < 2) || (ta > LEN && tb > LEN)) return;
-    const t0 = clamp(ta, 2, LEN), t1 = clamp(tb, 2, LEN);
+    if ((ta < 0 && tb < 0) || (ta > LEN && tb > LEN)) return;
+    const t0 = clamp(ta, 0, LEN), t1 = clamp(tb, 0, LEN);
     if (Math.abs(t0 - t1) < 0.01) return;
-    const hw = 3.3, sh = 1.6, edge = corr.outerEdge() + 0.15;
-    const inA = Math.max(corr.rampLat(t0) - hw, edge), outA = corr.rampLat(t0) + hw;
-    const inB = Math.max(corr.rampLat(t1) - hw, edge), outB = corr.rampLat(t1) + hw;
-    if (outA - inA < 0.4 && outB - inB < 0.4) return;
+    const h0 = corr.rampHalf(t0), h1 = corr.rampHalf(t1);
+    if (h0 <= 0.05 && h1 <= 0.05) return;
+    const inA = corr.rampLat(t0) - h0, outA = corr.rampLat(t0) + h0;
+    const inB = corr.rampLat(t1) - h1, outB = corr.rampLat(t1) + h1;
+    const sh = 1.6;
     const pal = this.pal;
     const road = this.haze(pal.road, dist);
     const shoulder = this.haze(shade(pal.road, 0.86), dist);
-    const white = this.haze(sc.timeOfDay === 'night' ? '#e9e9e0' : '#f0f0ea', dist);
+    const white = this.haze(sc.timeOfDay === 'night' ? '#eceade' : '#f2f2ec', dist);
     const P = (sec, u, t) => {
       const uw = corr.dir > 0 ? (sec.g.med + u) : -(sec.g.med + u);
       const g = sec.g, nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
@@ -476,9 +502,10 @@ const Scene = {
     this.quad(P(a, inA, t0), P(b, inB, t1), P(b, outB, t1), P(a, outA, t0), road);
     this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
     if (dist < 520) {
-      for (const off of [0.22, -0.22]) {
-        const iA = off > 0 ? inA + off : outA + off, iB = off > 0 ? inB + off : outB + off;
-        this.quad(P(a, iA - 0.09, t0), P(b, iB - 0.09, t1), P(b, iB + 0.09, t1), P(a, iA + 0.09, t0), white);
+      // 바깥 가장자리선. 안쪽은 노즈 부근에서 본선과 이어지므로 그리지 않는다
+      this.quad(P(a, outA - 0.31, t0), P(b, outB - 0.31, t1), P(b, outB - 0.13, t1), P(a, outA - 0.13, t0), white);
+      if (t0 > 70) {
+        this.quad(P(a, inA + 0.13, t0), P(b, inB + 0.13, t1), P(b, inB + 0.31, t1), P(a, inA + 0.31, t0), white);
       }
     }
     // 램프 바깥 비탈면 — 주변 지형 높이까지 자연스럽게 내린다
@@ -507,8 +534,8 @@ const Scene = {
         this.pt(b, uB + w / 2, dz), this.pt(a, uA + w / 2, dz), white);
     };
     /** 점선 — 칠 PAINT m + 빈 (PERIOD-PAINT) m 를 스테이션 기준으로 끊어 그린다 */
-    const PERIOD = 20, PAINT = 10;
-    const dash = (uA, uB, w) => {
+    const dash = (uA, uB, w, PERIOD, PAINT) => {
+      PERIOD = PERIOD || 20; PAINT = PAINT || 10;
       if (span <= 0) return;
       const iL = this.pt(a, uA - w / 2, dz), iR = this.pt(a, uA + w / 2, dz);
       const jL = this.pt(b, uB - w / 2, dz), jR = this.pt(b, uB + w / 2, dz);
@@ -532,16 +559,37 @@ const Scene = {
     solid(a.aIn + RoadStd.shL, b.aIn + RoadStd.shL, 0.18);
     solid(a.bIn - RoadStd.shL, b.bIn - RoadStd.shL, 0.18);
 
-    // 차로 경계 — 점선
+    // 차로 경계 — 점선. 부가차로(가감속차로) 경계는 촘촘한 점선으로 따로 구분한다
     for (let i = 1; i < a.nA + (a.auxA > 0.5 ? 1 : 0); i++) {
       const ua = a.aLane0 + lw * i, ub = b.aLane0 + lw * i;
       if (ua > a.aAux - 0.4) continue;
-      dash(ua, ub, 0.15);
+      if (i === a.nA) dash(ua, ub, 0.20, 6, 3);      // 부가차로 경계
+      else dash(ua, ub, 0.15);
     }
     for (let i = 1; i < a.nB + (a.auxB > 0.5 ? 1 : 0); i++) {
       const ua = a.bLane0 - lw * i, ub = b.bLane0 - lw * i;
       if (ua < a.bAux + 0.4) continue;
-      dash(ua, ub, 0.15);
+      if (i === a.nB) dash(ua, ub, 0.20, 6, 3);
+      else dash(ua, ub, 0.15);
+    }
+
+    // ---- 감속차로 유도 화살표 ----
+    // 어느 차로가 빠지는 차로인지 한눈에 보이게 한다
+    if (dist < 340 && span > 0) {
+      for (const corr of [sc.corrA, sc.corrB]) {
+        if (!corr) continue;
+        const sl0 = corr.dir > 0 ? a.sRoad : corr.L - a.sRoad;
+        const sl1 = corr.dir > 0 ? b.sRoad : corr.L - b.sRoad;
+        const lo = Math.min(sl0, sl1), hi = Math.max(sl0, sl1);
+        const ax = corr.auxAt((lo + hi) / 2);
+        if (!ax || ax.type !== 'decel') continue;
+        let k = Math.floor(lo / 70);
+        while (k * 70 < hi) {
+          const ss = k * 70; k++;
+          if (ss < ax.s0 + 40 || ss > ax.s1 - 30 || ss < lo) continue;
+          this.exitArrow(corr, ss, white);
+        }
+      }
     }
 
     if (dist > 80) return;
@@ -594,6 +642,25 @@ const Scene = {
         }
       }
     }
+  },
+
+  /** 감속차로 위의 유도 화살표 — 앞으로 뻗다가 오른쪽으로 꺾인다 */
+  exitArrow(corr, s0, white) {
+    const rd = this.road;
+    const uc = corr.laneU(corr.nLane);
+    const P = (ds, du) => {
+      const sr = corr.dir > 0 ? s0 + ds : corr.L - (s0 + ds);
+      const g = rd.at(sr);
+      const u = corr.dir > 0 ? (g.med + uc + du) : -(g.med + uc + du);
+      const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
+      return [g.x + nx * u, g.y + ny * u, g.z + rd.crossZ(g, u) + 0.014];
+    };
+    // 몸통
+    this.quadPts(P(0, -0.22), P(4.6, -0.22), P(4.6, 0.22), P(0, 0.22), white);
+    // 오른쪽으로 꺾이는 목
+    this.quadPts(P(4.6, -0.22), P(7.4, 0.62), P(7.4, 1.06), P(4.6, 0.22), white);
+    // 촉
+    this.tri(P(7.0, 0.10), P(9.6, 1.30), P(6.6, 1.60), white);
   },
 
   /* ---------- 방호벽·가드레일 ---------- */
@@ -888,6 +955,12 @@ const Scene = {
     }
   },
 
+  tri(a, b, c, style) {
+    Render.begin();
+    Render.add(a[0], a[1], a[2]); Render.add(b[0], b[1], b[2]); Render.add(c[0], c[1], c[2]);
+    Render.fill(style);
+  },
+
   quadPts(a, b, c, d, style) {
     Render.begin();
     Render.add(a[0], a[1], a[2]); Render.add(b[0], b[1], b[2]);
@@ -979,7 +1052,7 @@ const Scene = {
       putWheels({ x: cxx, y: cyy }, p.wid * 0.47, 0.53, [p.len * 0.34, -p.len * 0.29]);
     } else {
       this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('car', p), v.color, dist, near ? { h: 0.34, min: 0.55, top: 1.18 } : null);
-      putWheels({ x: cxx, y: cyy }, p.wid * 0.435, 0.33, [p.len * 0.31, -p.len * 0.30]);
+      putWheels({ x: cxx, y: cyy }, p.wid * 0.415, 0.33, [p.len * 0.31, -p.len * 0.30]);
     }
 
     if (dist < 340) this.lights(ctx, v, corr, bx, by, bz, hdg, dist, sc);
@@ -1044,7 +1117,7 @@ const Scene = {
       const lx = rearX - sh * hw * side, ly = rearY + ch * hw * side;
       if (dist < 90) {
         // 가까이에서는 실제 면적을 가진 등화로 그린다 — 점으로 찍으면 제동이 안 읽힌다
-        const hwl = 0.26, hh = 0.10;
+        const hwl = 0.17, hh = 0.072;
         const nx = -sh, ny = ch;
         const P = (dy, dz) => [lx + nx * dy - ch * 0.02, ly + ny * dy - sh * 0.02, bz + zT + dz];
         this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), tail);

@@ -219,11 +219,24 @@ class Corridor {
     const a = this.auxA[this.jOf(s)];
     return a < 0 ? null : this.aux[a];
   }
-  /** 부가차로 폭 계수 0..1 (테이퍼) */
+  /** 부가차로 폭 계수 0..1.
+      테이퍼 방향은 차로 종류마다 다르다. 가속차로는 노즈(s0)에서 이미 온전한 폭이어야
+      램프가 합류할 자리가 있고, 감속차로는 노즈(s1) 쪽이 온전해야 빠져나갈 자리가 있다.
+      양 끝을 똑같이 좁히면 정작 필요한 곳에서 차로가 사라진다. */
   auxWidth(s) {
     const a = this.auxAt(s); if (!a) return 0;
     const inT = clamp((s - a.s0) / 70, 0, 1), outT = clamp((a.s1 - s) / 70, 0, 1);
+    if (a.type === 'accel') return smoothstep(outT);
+    if (a.type === 'decel') return smoothstep(inT);
     return smoothstep(Math.min(inT, outT));
+  }
+
+  /** 램프 노면 반폭. 노즈에서는 차로 하나(1.8 m)로 좁혀져 가감속차로와 이어지고,
+      멀어질수록 길어깨를 갖춘 온전한 단면(3.3 m)이 된다.
+      끝에서는 다시 좁혀 없앤다 — 사각으로 뚝 끊긴 절단면이 보이지 않게. */
+  rampHalf(t) {
+    const w = lerp(1.8, 3.3, clamp(t / 140, 0, 1));
+    return w * smoothstep(clamp((RAMP_LEN - t) / 45, 0, 1));
   }
   nLaneAt(s) { return this.nLane + (this.auxAt(s) ? 1 : 0); }
 
