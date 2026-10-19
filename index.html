@@ -222,6 +222,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="presets">
           <button data-preset="free">자유류</button>
           <button data-preset="near">임계 상태</button>
+          <button data-preset="phantom">유령정체 · 무병목</button>
           <button data-preset="jam">혼잡·합류 병목</button>
           <button data-preset="peak">첨두 (수요 변동)</button>
           <button data-preset="rain">우천 · 황혼</button>
@@ -340,10 +341,13 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
             <canvas id="fdCv" width="480" height="300"></canvas>
           </div>
           <div class="chart">
-            <h4>시공간 속도장 (x–t diagram)</h4>
-            <p>가로는 위치, 세로는 시간(아래가 현재). 붉은 띠가 왼쪽 아래로 기울어 내려가면
-               정체파가 상류로 번지고 있다는 뜻이다.</p>
-            <canvas id="stCv" width="480" height="300"></canvas>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <h4>차로별 시공간 속도장 (x–t diagram)</h4>
+              <select id="stLane" aria-label="시공간도에 표시할 차로" style="background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit;font-size:12px"></select>
+            </div>
+            <p>가로는 위치, 세로는 시간(위가 과거, 아래가 현재)이다. 붉은 띠가 왼쪽 아래로 기울면
+               정체파가 상류로 번진다. 경계 밖 대기열은 길이 추정치로 정지 구간처럼 이어 그린다.</p>
+            <canvas id="stCv" width="480" height="420"></canvas>
           </div>
         </div>
         <div class="sect">통계</div>
@@ -355,15 +359,22 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="chart doc">
           <h4>차두 추종 — IDM</h4>
           <p>Treiber, Hennecke &amp; Helbing (2000), <i>Congested traffic states in empirical
-          observations and microscopic simulations</i>, Phys. Rev. E 62, 1805.</p>
+          observations and microscopic simulations</i>, Phys. Rev. E 62, 1805. 이 논문은 단일차로 IDM으로
+          병목 주변의 관측 상태를 재현한다. 현재 앱의 다차로 상호작용과 전 차로 유령정체를 직접 입증하는 결과는 아니다.</p>
           <code>dv/dt = a [ 1 − (v/v₀)⁴ − (s*/s)² ],&nbsp; s* = s₀ + max(0, vT + v·Δv / 2√(ab))</code>
           <p class="ref">희망 차두시간 T 는 도로용량편람(2013)의 기본구간 용량 2,200 승용차/시/차로에
           맞춰 재보정했다(승용차 0.98 s). 표의 대표값 1.5 s 를 그대로 쓰면 평형해 용량이 실측보다 낮게 나온다.</p>
 
           <h4>지각 지연 — Human Driver Model</h4>
-          <p>Treiber, Kesting &amp; Helbing (2006), Physica A 360, 71. 운전자는 반응시간만큼
-          지연된 선행차 상태에 반응한다. 여기에 Ornstein–Uhlenbeck 유색잡음을 더하면
-          임계밀도 부근에서 <b>유령정체</b>가 저절로 생긴다.</p>
+          <p>Treiber, Kesting &amp; Helbing (2006), Physica A 360, 71의 일부를 참고한다.
+          현재는 반응시간만큼 지연된 최근접 선행차 상태와 별도의 차량별 가속도 잡음을 사용한다.
+          논문의 간격·상대속도 추정오차, 시간적 예상, 다중 선행차 예측까지 구현한 전체 HDM은 아니다.
+          정체파의 발생 여부와 크기는 수요·밀도·교란 이력에도 좌우된다.</p>
+
+          <h4>유령정체 프리셋</h4>
+          <p>예열 뒤 같은 위치의 모든 본선 차로에 유한한 초기 속도 교란을 준다. 이후에는 기본 추종식만
+          작동하므로 파동의 성장은 실행 결과로 확인해야 한다. 상류 가상 대기열의 시공간도 표시는
+          정지 간격으로 환산한 길이이며, 그 경계 밖 차량의 미시 이동을 계산하지 않는다.</p>
 
           <h4>차로 변경 — MOBIL</h4>
           <p>Kesting, Treiber &amp; Helbing (2007), TRR 1999, 86.</p>
@@ -372,7 +383,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
             <li>bias 에 우측주행 원칙과 지정차로제를 싣는다</li>
             <li>램프·부가차로 종점·차단 사고 앞에서는 bias 가 커지고 b_safe 가 완화되어 <b>강제 차로변경</b>이 된다</li>
             <li>본선 차량의 <b>협조 양보</b>가 없으면 합류가 성립하지 않으므로 함께 모형화했다</li>
-            <li>합류 직후 희망 차두시간을 줄였다가 회복시킨다 (Laval &amp; Leclercq 2008 의 relaxation)</li>
+            <li>차로 변경 뒤 4초 동안 희망 차두시간과 최소 간격을 줄이는 자체 완화 휴리스틱을 쓴다.</li>
           </ul>
 
           <h4>도로 선형</h4>
@@ -398,7 +409,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
           <p>HCM 기본구간 밀도 기준 — A ≤ 7, B ≤ 11, C ≤ 16, D ≤ 22, E ≤ 28, F &gt; 28 (pc/km/차로).
           중차량은 승용차환산계수 1.5 로 환산하며, 종단경사 2% 초과분만큼 계수를 키운다.</p>
 
-          <h4>이 모의에서 실제로 측정된 값</h4>
+          <h4>기존 보정 목표 (현재 전체 구간 계산으로 재검증 필요)</h4>
           <ul>
             <li>자유속도 약 100~104 km/h (제한 100 km/h, 준수도 분포 반영)</li>
             <li>용량 부근 유량 1,700~1,900 대/시/차로, 그때의 속도 85~89 km/h</li>

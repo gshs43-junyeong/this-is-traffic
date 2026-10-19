@@ -15,6 +15,7 @@ const CFG_DEFAULT = {
   incidentRate: 0.5,   // 돌발상황 건/시
   reactionTime: 0.5,   // 지각 반응시간 s
   noise: 1.0,          // 가속도 잡음 배율
+  phantomSeed: false,   // 무병목 유령정체 프리셋의 초기 교란
   laneRule: true,      // 지정차로제
   weather: 'dry',      // dry | rain
   peak: false,         // 첨두 수요 프로파일
@@ -72,11 +73,11 @@ const App = {
     this.corrB = c.twoWay ? new Corridor(this.road, -1, c, (c.seed | 0) * 7 + 2) : null;
     this.simTime = 0; this.dirty = false;
     this.makePlayer();
-    // 내 차 주변을 설정한 밀도로 미리 깔고, 짧게 돌려 자리를 잡게 한다
-    this.corrA.focusS = this.player.s;
-    if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
+    // 전체 노선을 설정 수요로 채우고, 짧게 돌려 초기 교통류를 안정시킨다
     this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
     this.warm(30);
+    // 초기 안정화가 끝난 뒤 교란을 넣어 첫 화면부터 성장 과정을 볼 수 있게 한다.
+    if (c.phantomSeed) this.corrA.seedPhantomPerturbation();
     UI.toast(this.roadSummary(), 5);
   },
   roadSummary() {
@@ -138,10 +139,9 @@ const App = {
     const arr = this.corrA.lanes[this.player.lane];
     const k = arr.indexOf(this.player); if (k >= 0) arr.splice(k, 1);
     arr.splice(this.corrA.seek(arr, this.player.s), 0, this.player);
-    this.corrA.focusS = this.player.s;
-    if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
     this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
     this.warm(25);
+    if (c.phantomSeed) this.corrA.seedPhantomPerturbation();
   },
 
   /* ---------- 프리셋 ---------- */
@@ -149,12 +149,23 @@ const App = {
     const c = this.cfg;
     const set = (o) => { Object.assign(c, o); for (const inp of $$('[data-cfg]')) { const k = inp.dataset.cfg; if (inp.type === 'checkbox') inp.checked = !!c[k]; else inp.value = c[k]; const out = inp.parentElement.querySelector('.val'); if (out) out.textContent = UI.fmtCfg(k, c[k]); } };
     switch (name) {
-      case 'free': set({ demand: 900, rampPct: 8, incidentRate: 0, peak: false }); UI.toast('자유류 — 수요 900대/시/차로', 3); break;
-      case 'near': set({ demand: 1700, rampPct: 12, incidentRate: 0, peak: false }); UI.toast('임계 상태 — 작은 교란도 정체로 자란다', 4); break;
-      case 'jam': set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false }); UI.toast('혼잡 — 합류부 병목에서 정체가 시작된다', 4); break;
-      case 'peak': set({ demand: 1400, rampPct: 16, incidentRate: 0.3, peak: true }); UI.toast('첨두 — 수요가 용량을 넘었다가 되돌아온다', 4); break;
-      case 'rain': set({ weather: 'rain', timeOfDay: 'dusk', demand: 1600 }); UI.toast('우천 — 희망속도·차두시간이 나빠진다', 4); break;
-      case 'night': set({ timeOfDay: 'night', demand: 800 }); UI.toast('야간 — 통행량이 적다', 3); break;
+      case 'free':
+        set({ demand: 900, rampPct: 8, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        this.rebuild(); UI.toast('자유류 — 수요 900대/시/차로', 3); return;
+      case 'near':
+        set({ demand: 1700, rampPct: 12, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        this.rebuild(); UI.toast('임계 상태 — 수요와 램프 합류로 작은 파동을 관찰', 4); return;
+      case 'phantom':
+        set({ demand: 1950, rampPct: 0, incidentRate: 0, peak: false, noise: 1.6, reactionTime: 0.8, phantomSeed: true });
+        this.rebuild(); UI.toast('유령정체 — 병목 없이 전 차로의 초기 교란에서 파동이 성장', 4); return;
+      case 'jam':
+        set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        this.rebuild(); UI.toast('혼잡 — 과포화 유입과 합류 병목', 4); return;
+      case 'peak':
+        set({ demand: 1400, rampPct: 16, incidentRate: 0.3, peak: true, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        this.rebuild(); UI.toast('첨두 — 수요가 용량을 넘었다가 되돌아온다', 4); return;
+      case 'rain': set({ weather: 'rain', timeOfDay: 'dusk', demand: 1600, phantomSeed: false }); UI.toast('우천 — 희망속도·차두시간이 나빠진다', 4); break;
+      case 'night': set({ timeOfDay: 'night', demand: 800, phantomSeed: false }); UI.toast('야간 — 통행량이 적다', 3); break;
       case 'plain': set({ relief: 12, density: 20, ruggedness: 15 }); this.rebuild(); UI.toast('평야부 — 길게 뻗은 완만한 선형', 3.5); return;
       case 'hill': set({ relief: 45, density: 45, ruggedness: 40 }); this.rebuild(); UI.toast('구릉지 — 완만한 굽이와 짧은 터널', 3.5); return;
       case 'mount': set({ relief: 82, density: 72, ruggedness: 78 }); this.rebuild(); UI.toast('산악부 — 최소반경에 가까운 굽이, 긴 터널과 교량', 4); return;
@@ -399,9 +410,7 @@ const App = {
       if (this.auto) this.player.offRoad = false;
       while (this.acc >= DT && n < 16) {
         if (!this.auto) this.drivePlayer(DT);
-        // 계산 대상 구간을 내 차 위치에 맞춘다
-        this.corrA.focusS = this.player.s;
-        if (this.corrB) this.corrB.focusS = this.corrA.L - this.player.s;
+        // 플레이어 위치와 무관하게 전체 구간의 교통류를 계속 계산한다
         this.corrA.step(DT, this.player);
         if (this.corrB) this.corrB.step(DT, { auto: true });
         this.simTime += DT; this.acc -= DT; n++;

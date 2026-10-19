@@ -16,7 +16,7 @@ const UI = {
     this.app = app;
     const ids = ['hud', 'spd', 'spdUnit', 'gaugeArc', 'limitSign', 'stn', 'nextIC', 'gradeV', 'curveV',
       'structV', 'laneV', 'losV', 'kV', 'qV', 'vV', 'delayV', 'ttiV', 'nvehV', 'clockV', 'msg',
-      'panel', 'stats', 'fdCv', 'stCv', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList', 'incbox'];
+      'panel', 'stats', 'fdCv', 'stCv', 'stLane', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList', 'incbox'];
     for (const id of ids) this.el[id] = document.getElementById(id);
     this.bindControls();
     this.toastT = 0;
@@ -47,6 +47,9 @@ const UI = {
     }
     this.el.btnMenu.addEventListener('click', () => this.togglePanel(true));
     this.el.btnClose.addEventListener('click', () => this.togglePanel(false));
+    this.el.stLane.addEventListener('change', () => {
+      this.drawST(this.el.stCv);
+    });
     $('#btnRegen').addEventListener('click', () => { app.rebuild(); this.togglePanel(false); });
     for (const b of $$('[data-preset]')) b.addEventListener('click', () => app.preset(b.dataset.preset));
     for (const b of $$('[data-act]')) b.addEventListener('click', () => app.action(b.dataset.act));
@@ -242,16 +245,40 @@ const UI = {
     ctx.fillStyle = '#0f1218'; ctx.fillRect(0, 0, W, H);
     const rows = c.stRows;
     if (!rows.length) return;
-    const pad = 34, gw = W - pad - 8, gh = H - pad - 14;
+    if (this.el.stLane.dataset.lanes !== String(c.nLane)) {
+      this.el.stLane.innerHTML = '<option value="-1">모든 차로</option>' +
+        Array.from({ length: c.nLane }, (_, i) => `<option value="${i}">${i + 1}차로</option>`).join('');
+      this.el.stLane.dataset.lanes = String(c.nLane);
+      this.el.stLane.value = '-1';
+    }
+    const laneFilter = Number(this.el.stLane.value);
+    const laneIds = laneFilter < 0 ? Array.from({ length: c.nLane }, (_, i) => i) : [laneFilter];
+    const queueRows = c.stQueueRows || [];
+    let queueMax = 0;
+    for (const row of queueRows) for (const lane of laneIds) queueMax = Math.max(queueMax, row[lane] || 0);
+    const pad = 54, gw = W - pad - 8, gh = H - pad - 14;
+    const xSpan = c.L + queueMax;
+    const bandH = gh / laneIds.length;
     const img = ctx.createImageData(gw, gh);
     const vfree = this.app.cfg.limit * KMH;
     for (let y = 0; y < gh; y++) {
-      // 위가 과거, 아래가 현재
-      const r = rows[Math.min(rows.length - 1, Math.floor(y / (gh - 1) * (rows.length - 1)))];
+      const band = Math.min(laneIds.length - 1, Math.floor(y / bandH));
+      const localY = y - band * bandH;
+      // 각 차로 띠마다 위가 과거, 아래가 현재다.
+      const rowAt = Math.min(rows.length - 1,
+        Math.floor(localY / Math.max(1, bandH - 1) * (rows.length - 1)));
+      const r = rows[rowAt];
       if (!r) continue;
+      const lane = laneIds[band];
+      const qLen = queueRows[rowAt] ? queueRows[rowAt][lane] : 0;
       for (let x = 0; x < gw; x++) {
-        const ci = Math.floor(x / gw * c.nCell);
-        const v = r[ci];
+        const s = x / gw * xSpan - queueMax;
+        let v;
+        if (s < 0) v = -s <= qLen ? 0 : -1;
+        else {
+          const ci = Math.min(c.nCell - 1, Math.floor(s / c.cellLen));
+          v = r[lane * c.nCell + ci];
+        }
         const o = (y * gw + x) * 4;
         if (v < 0) { img.data[o] = 22; img.data[o + 1] = 25; img.data[o + 2] = 32; img.data[o + 3] = 255; continue; }
         const col = speedColor(v, vfree);
@@ -262,14 +289,31 @@ const UI = {
     ctx.putImageData(img, pad, 8);
     ctx.strokeStyle = '#2a3040'; ctx.strokeRect(pad, 8, gw, gh);
     ctx.fillStyle = '#6b7383'; ctx.font = '10px system-ui';
-    for (let s = 0; s <= c.L; s += 5000) ctx.fillText((s / 1000) + 'km', pad + s / c.L * gw - 8, H - 6);
+    for (let i = 0; i < laneIds.length; i++) {
+      const y = 8 + i * bandH;
+      ctx.fillText(`${laneIds[i] + 1}차로`, 3, y + 12);
+      if (i > 0) {
+        ctx.strokeStyle = '#ffffff33';
+        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(pad + gw, y); ctx.stroke();
+      }
+    }
+    const xAt = s => pad + (s + queueMax) / xSpan * gw;
+    if (queueMax > 0) {
+      const qLabel = queueMax < 1000 ? '−' + fmt0(queueMax) + 'm' : '−' + fmt1(queueMax / 1000) + 'km';
+      ctx.fillText(qLabel, pad - 5, H - 6);
+    }
+    for (let s = 0; s <= c.L; s += 5000) ctx.fillText((s / 1000) + 'km', xAt(s) - 8, H - 6);
+    if (queueMax > 0) {
+      ctx.strokeStyle = '#ffffff88';
+      ctx.beginPath(); ctx.moveTo(xAt(0), 8); ctx.lineTo(xAt(0), 8 + gh); ctx.stroke();
+    }
     const span = rows.length * c.stPeriod;
     ctx.fillText('현재', 4, 8 + gh);
     ctx.fillText('-' + Math.round(span / 60) + '분', 4, 16);
     // 인터체인지 위치
     ctx.strokeStyle = '#ffffff33';
     for (const ic of c.icLocal) {
-      const x = pad + ic.s / c.L * gw;
+      const x = xAt(ic.s);
       ctx.beginPath(); ctx.moveTo(x, 8); ctx.lineTo(x, 8 + gh); ctx.stroke();
     }
   },
@@ -283,6 +327,9 @@ const UI = {
     add('구간 연장', fmt1(c.L / 1000) + ' km · ' + c.nLane + '차로');
     add('상류 유입 수요', fmt0(c.demandNow()) + ' 대/시 (' + fmt0(c.demandNow() / c.nLane) + ' 대/시/차로)');
     add('구간 내 차량', fmt0(c.count()) + ' 대  (상류 대기 ' + fmt0(c.upstreamQueue()) + ' 대)');
+    const queued = c.upstreamQueueByLane(), queueM = c.upstreamQueueLengthByLane();
+    add('상류 대기열 (차로별)', queued.map((n, i) =>
+      `${i + 1}차로 ${fmt0(n)}대 · 약 ${fmt0(queueM[i])}m`).join(' · '));
     add('통과 완료', fmt0(s.exited) + ' 대');
     const meanTT = s.exited ? s.vehSec / s.exited : 0;
     const meanFF = s.exited ? (s.vehSec - s.delaySec) / s.exited : 0;

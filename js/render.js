@@ -1137,7 +1137,7 @@ const Scene = {
       }
     }
     // 방향지시등
-    if (v.blink && facing < 0 && (Math.floor(sc.time * 1.6) & 1)) {
+    if (v.blink && facing < 0 && (Math.floor((sc.time + v.blinkPhase) * 1.6) & 1)) {
       const side = v.blink * (corr.dir > 0 ? 1 : -1);
       const lx = rearX - sh * p.wid * 0.5 * side, ly = rearY + ch * p.wid * 0.5 * side;
       const q = Render.point(lx, ly, bz + zT);

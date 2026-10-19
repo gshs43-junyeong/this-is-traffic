@@ -7,12 +7,11 @@
          dv/dt = a [ 1 - (v/v0)^delta - (s*(v,dv)/s)^2 ]
          s*(v,dv) = s0 + max(0, v T + v dv / (2 sqrt(a b)))
 
-   확률 가속 : Ornstein-Uhlenbeck 잡음 항 (Treiber & Kesting 2013, 11.3.4절)
-       결정론적 IDM 만으로는 실측만큼 정체파가 잘 생기지 않는다. 유색잡음을
-       더하면 임계밀도 부근에서 stop-and-go 파가 자발적으로 형성된다.
+   확률 가속 : 차량별 Ornstein-Uhlenbeck 가속도 잡음.
+       교란을 제공하지만 정체파의 발생은 수요, 밀도, 병목, 과거 교란에도 좌우된다.
 
-   지각 지연 : 반응시간 만큼 지연된 선행차 상태를 참조 (Human Driver Model,
-       Treiber, Kesting & Helbing (2006), Physica A 360, 71).
+   지각 지연 : 반응시간만큼 지연된 최근접 선행차 상태를 참조한다.
+       HDM 의 시간·공간 예측과 지각 오차 전체를 구현한 것은 아니다.
 
    차로 변경 : MOBIL (Minimizing Overall Braking Induced by Lane changes)
        Kesting, Treiber & Helbing (2007), TRR 1999, 86.
@@ -20,8 +19,7 @@
          유인  : da_self + p (da_new_follower + da_old_follower) > da_th + bias
        bias 에 우측주행 원칙(지정차로제)과 강제 차로변경 압력을 싣는다.
 
-   차로변경 후 완화 : 합류 직후에는 희망 차두시간을 줄였다가 회복시킨다
-       (Laval & Leclercq 2008 의 relaxation) — 없으면 합류부 용량이 과소평가된다.
+   차로변경 후 완화 : 차로 변경 뒤 차두시간과 최소 간격을 줄이는 자체 휴리스틱.
 
    동력 한계 : 엔진출력·구름저항·공기저항·종단경사를 반영해 자유가속을 제한한다.
        중차량이 오르막에서 기어 다니며 이동 병목(moving bottleneck)을 만든다.
@@ -71,15 +69,13 @@ for (const k in VCLASS) {
   p.CrG = GRAV * p.Cr;                    // 구름저항 가속도
 }
 
-const MOBIL = { bSafe: 4.0, dAth: 0.20, biasRight: 0.30 };
+const MOBIL = { bSafe: 4.0, dAth: 0.20, keepRight: 0.85 };
 const DT = 0.04;                 // 물리 적분 간격 (s)
 const NOISE_K = Math.sqrt(2 * DT / 6);   // OU 잡음 확산항 계수 (tau = 6 s)
 const U_LERP = 1 - Math.exp(-DT / 0.62);  // 횡방향 접근 계수
 const HIST = 48;                 // 지각지연용 이력 버퍼 길이 (48 * 0.04 = 1.92 s)
 const RAMP_LEN = 340;            // 램프 연장 (m)
 const RAMP_OFF = 33;             // 램프 종점의 본선 이격 (m)
-const SIM_BACK = 1100;           // 플레이어 뒤로 계산할 거리 (m)
-const SIM_AHEAD = 3200;          // 플레이어 앞으로 계산할 거리 (m)
 const ON_GORE = 780;             // 진출 노즈에서 진입 노즈까지 (m)
 
 let _vid = 1;
@@ -101,7 +97,8 @@ class Vehicle {
     this.color = rng.weighted(cls === 'car' ? CAR_COLORS : cls === 'truck' ? TRUCK_COLORS : BUS_COLORS);
     this.s = 0; this.v = 0; this.a = 0; this.u = 0; this.uT = 0;
     this.lane = 0; this.laneT = 0; this.yawRel = 0;
-    this.eta = 0; this.relax = 0; this.blink = 0; this.lcCool = 0; this.decide = rng.next() * 0.4;
+    this.eta = 0; this.relax = 0; this.blink = 0; this.blinkPhase = rng.next() * 1.25;
+    this.pendingLane = -1; this.signalT = 0; this.lcCool = 0; this.decide = rng.next() * 0.4;
     this.exitS = Infinity; this.t0 = 0; this.s0enter = 0;
     this.obstacle = false; this.isPlayer = false; this.brake = 0; this.alive = true;
     this.dz = 0; this.rampT = 0;
@@ -158,7 +155,13 @@ class Corridor {
     this.buildAux();
     this.buildRamps();
     this.precompute();
-    this.spawnWait = 0; this.queueUp = 0; this.entered = 0; this.rejected = 0;
+    this.spawnWait = 0;
+    // 경계에서 바로 투입할 수 없는 수요차량을 차로별 FIFO 대기열에 보존한다.
+    this.upstreamVehicles = Array.from({ length: this.nLane }, () => []);
+    this.upstreamHead = new Array(this.nLane).fill(0);
+    this.upstreamMeters = new Array(this.nLane).fill(0);
+    this.queueUp = 0;
+    this.entered = 0;
     this.stepId = 0;
     this.incidents = [];
     this.incidentTimer = this.rng.exp(3600 / Math.max(cfg.incidentRate, 1e-6));
@@ -376,15 +379,11 @@ class Corridor {
   /* =========================== 스텝 =========================== */
   step(dt, player) {
     this.time += dt;
-    // 계산 대상 구간을 플레이어를 따라 옮기고, 새로 드러난 앞쪽을 목표 밀도로 채운다
-    if (this.focusS != null) {
-      const w = this.window();
-      if (this.filledTo == null) this.filledTo = w[1];
-      if (w[1] > this.filledTo + 60) {
-        this.fillRange(Math.max(this.filledTo, w[0]), w[1], 600);
-        this.filledTo = w[1];
-      }
-      if (w[1] < this.filledTo) this.filledTo = w[1];
+    // 고정된 전체 구간을 계산한다. 플레이어가 멀어져도 차량과 정체파는 계속 남는다.
+    if (this.filledTo == null) this.filledTo = this.L;
+    if (this.L > this.filledTo + 60) {
+      this.fillRange(this.filledTo, this.L, Math.max(600, this.nLane * 300));
+      this.filledTo = this.L;
     }
     const dSteps = Math.round(this.cfg.reactionTime / DT);
 
@@ -564,7 +563,8 @@ class Corridor {
     const uPrev = v.u;
     v.u += (v.uT - v.u) * U_LERP;      // 차로 중심으로 지수 접근 (tau = 0.62 s)
     v.yawRel = v.v > 1 ? Math.atan2((v.u - uPrev) / dt, v.v) : 0;
-    if (Math.abs(v.u - v.uT) < 0.06) v.blink = 0;
+    if (v.pendingLane >= 0) v.signalT = Math.max(0, v.signalT - dt);
+    if (v.pendingLane < 0 && Math.abs(v.u - v.uT) < 0.06) v.blink = 0;
     v.pushHist();
   }
 
@@ -618,7 +618,11 @@ class Corridor {
       if (lead && lead.obstacle && lead.s - v.s < 120) continue;   // 사고 차로로는 안 들어간다
 
       // 우측주행 원칙: 오른쪽으로 가면 유인, 왼쪽으로 가면 저항
-      let bias = dirLC > 0 ? -MOBIL.biasRight : MOBIL.biasRight;
+      // 지정차로제가 켜져 있으면 오른쪽 차로를 확실히 우선한다.
+      // 왼쪽 이동은 현재 차로의 느린 선행차를 추월할 만큼 이득이 있을 때 선택된다.
+      let bias = this.cfg.laneRule
+        ? (dirLC > 0 ? -MOBIL.keepRight : MOBIL.keepRight)
+        : 0;
       if (v.p.heavy && this.cfg.laneRule) bias += dirLC > 0 ? -0.25 : 0.45;
       // 강제 차로변경 압력
       if (mand.dir === dirLC) bias -= 7.0 * urg;
@@ -629,7 +633,18 @@ class Corridor {
       const thr = MOBIL.dAth / v.aggr;
       if (gain > thr && gain > bestGain) { bestGain = gain; bestLane = tl; }
     }
-    if (bestLane >= 0) this.doLaneChange(v, bestLane);
+    if (v.pendingLane >= 0 && v.pendingLane !== bestLane) {
+      v.pendingLane = -1; v.signalT = 0; v.blink = 0;
+    }
+    if (bestLane < 0) return;
+    if (v.pendingLane !== bestLane) {
+      // 방향지시등을 먼저 켜고 안전한 틈이 유지되는지 다음 판단에서 다시 확인한다.
+      v.pendingLane = bestLane;
+      v.signalT = 0.85 + this.rng.next() * 0.35;
+      v.blink = bestLane > cur ? 1 : -1;
+      return;
+    }
+    if (v.signalT <= 0) this.doLaneChange(v, bestLane);
   }
 
   /** MOBIL 내부용 간이 IDM (잡음·동력한계 제외) */
@@ -680,6 +695,7 @@ class Corridor {
   }
 
   doLaneChange(v, tl) {
+    const fromLane = v.lane;
     const from = this.lanes[v.lane];
     const k = from.indexOf(v);
     if (k >= 0) from.splice(k, 1);
@@ -689,7 +705,8 @@ class Corridor {
     v.uT = this.laneU(tl);
     v.relax = 1;
     v.lcCool = 1.6;
-    v.blink = tl > v.laneT ? 1 : -1;
+    v.pendingLane = -1; v.signalT = 0;
+    v.blink = tl > fromLane ? 1 : -1;
     v.laneT = tl;
   }
 
@@ -718,14 +735,11 @@ class Corridor {
   newVehicle(cls) {
     const v = this.pool.pop() || new Vehicle();
     v.init(cls, this.rng, this.cfg);
-    if (v.p.heavy && this.rng.chance(0.12)) v.ruleBreaker = true; else v.ruleBreaker = false;
+    if (v.p.heavy && this.cfg.laneRule && this.rng.chance(0.04)) v.ruleBreaker = true; else v.ruleBreaker = false;
     return v;
   }
 
-  /* 유출 배정.
-     예전에는 생성 시점에 한 번만 굴렸는데, 계산 창이 3.2 km 라 그때 앞에
-     보이는 램프가 없으면 영영 유출하지 않았다(실제로 유출률이 0 이 됐다).
-     이제는 램프에 다가갈 때마다 그 램프에 대해 딱 한 번씩 굴린다. */
+  /* 차량이 각 램프에 다가갈 때마다 해당 램프의 유출 여부를 한 번 판단한다. */
   assignExit(v, fromS) { v.exitS = Infinity; v.exitSeen = -1; }
 
   considerExit(v) {
@@ -742,20 +756,33 @@ class Corridor {
     }
   }
 
-  /** 모의 대상 구간 — 플레이어 주변만 계산한다 */
+  /** 모의 대상 구간 — 실제 노선 전체를 계속 계산한다 */
   window() {
-    const f = this.focusS != null ? this.focusS : 0;
-    return [Math.max(0, f - SIM_BACK), Math.min(this.L, f + SIM_AHEAD)];
+    return [0, this.L];
   }
 
-  /* 시작하자마자 설정한 밀도가 보이도록 창 안을 미리 채운다.
-     시간으로 채우면 40 km 를 메우는 데 20분 넘게 걸려서, 출발할 때 앞이 텅 빈다.
-     자유류 평형 차두로 깔아 둔 뒤 짧게 돌려 IDM 이 자리를 잡게 한다. */
+  /* 시작할 때 전체 노선을 목표 수요에 맞춰 채운다.
+     이후에는 모든 차량을 계속 계산해 차로별 정체파와 긴 대기행렬을 보존한다. */
   prefill(maxVeh) {
     const w = this.window();
-    const n = this.fillRange(w[0], w[1], maxVeh || 4000);
+    const estimated = Math.ceil(this.L * this.demandNow() / (3600 * 20) * 1.2);
+    const n = this.fillRange(w[0], w[1], maxVeh || Math.max(4000, estimated));
     this.filledTo = w[1];
     return n;
+  }
+
+  /* 물리적 병목 없이 임계 교통류의 불안정성을 관찰하기 위한 유한 초기 속도 교란.
+     매개변수나 희망속도는 바꾸지 않고, 같은 위치의 차량 속도만 한 번 낮춘 뒤
+     평상시 추종식에 맡겨 파동의 성장·소멸을 관찰한다. */
+  seedPhantomPerturbation() {
+    const s0 = this.L * 0.55, s1 = s0 + 180;
+    for (let li = 0; li < this.nLane; li++) {
+      for (const v of this.lanes[li]) {
+        if (v.obstacle || v.isPlayer || v.s < s0 || v.s > s1) continue;
+        v.v = Math.max(5, v.v * this.rng.range(0.58, 0.72));
+        v.a = 0;
+      }
+    }
   }
 
   /** [s0, s1] 구간을 목표 밀도로 채운다 */
@@ -782,12 +809,24 @@ class Corridor {
         const j = this.jOf(s);
         const vDes = Math.min(v.v0own, v.v0lim, this.capA[j]) * this.multA[j];
         v.s = s; v.v = vDes * this.rng.range(0.94, 1.0);
+        const k = this.seek(arr, s);
+        const lead = arr[k] || null, follower = arr[k - 1] || null;
+        const leadGap = lead ? lead.s - lead.len - s : Infinity;
+        const followerGap = follower ? s - v.len - follower.s : Infinity;
+        if (leadGap < v.p.s0 + v.v * v.Tbase * 0.55 ||
+            (follower && followerGap < follower.p.s0 + follower.v * follower.Tbase * 0.55)) {
+          // 기존 플레이어/차량과 겹치지 않게 후보 위치만 건너뛴다.
+          s += Math.max(v.len + v.p.s0 + v.v * v.Tbase * 0.85, v.v * this.rng.exp(meanHw));
+          v.alive = false;
+          if (this.pool.length < 2500) this.pool.push(v);
+          continue;
+        }
         v.lane = li; v.laneT = li;
         v.u = v.uT = this.laneU(li);
         v.t0 = this.time; v.s0enter = s;
         for (let h = 0; h < HIST; h++) { v.hs[h] = v.s - v.v * (HIST - h) * DT; v.hv[h] = v.v; }
         this.assignExit(v, s);
-        arr.splice(this.seek(arr, s), 0, v);
+        arr.splice(k, 0, v);
         placed++;
         // 다음 차까지의 거리 — 포아송 도착을 거리로 환산하고 최소 안전 차두를 지킨다
         const minGap = v.len + v.p.s0 + v.v * v.Tbase * 0.85;
@@ -804,42 +843,77 @@ class Corridor {
 
   spawn(dt) {
     const q = this.demandNow();
-    if (q <= 0) return;
-    this.spawnWait -= dt;
-    if (this.spawnWait > 0) return;
-    this.spawnWait += this.rng.exp(3600 / q);
-    // 상류 경계에서 넣을 수 있는 차로를 고른다 — 앞 간격이 가장 넉넉한 곳
-    const cls = this.pickClass();
-    const v = this.newVehicle(cls);
-    // 유입 경계는 창의 뒤쪽 끝이다 — 플레이어를 따라 함께 움직인다
-    const bnd = this.window()[0];
-    let best = -1, bestGap = -Infinity, bestLead = null;
-    const minLane = v.p.heavy ? this.heavyMinLane() : 0;
-    for (let i = minLane; i < this.nLane; i++) {
-      const arr = this.lanes[i];
-      const k = this.seek(arr, bnd);
-      const lead = arr[k] || null;
-      const gap = lead ? lead.s - lead.len - bnd : 1e5;
-      if (gap > bestGap) { bestGap = gap; best = i; bestLead = lead; }
+    if (q > 0) {
+      this.spawnWait -= dt;
+      if (this.spawnWait <= 0) {
+        const v = this.newVehicle(this.pickClass());
+        v.t0 = this.time;                 // 경계 대기시간도 총 통행시간에 포함한다
+        const lane = this.entryLane(v);
+        if (lane >= 0) {
+          this.upstreamVehicles[lane].push(v);
+          this.upstreamMeters[lane] += v.len + v.p.s0 + 2;
+          this.queueUp++;
+        } else {
+          v.alive = false;
+          if (this.pool.length < 2500) this.pool.push(v);
+        }
+        this.spawnWait += this.rng.exp(3600 / q);
+      }
     }
-    const vDes = Math.min(v.v0own, v.v0lim);
-    // 경계에 자리가 없으면 상류(음의 station)에 붙여 대기행렬을 만든다.
-    // 수요가 용량을 넘으면 여기에 줄이 서고, 그 길이가 곧 상류 지체다.
-    const need = v.p.s0 + vDes * v.Tbase * 0.55 + 1.5;
-    let sIns = bnd;
-    if (bestLead && bestLead.s - bestLead.len - bnd < need) sIns = bestLead.s - bestLead.len - need;
-    if (best < 0 || sIns < bnd - 1200) { this.pool.push(v); this.rejected++; this.queueUp++; return; }
-    v.s = sIns; v.lane = best; v.laneT = best;
-    v.u = v.uT = this.laneU(best);
-    v.v = Math.min(vDes, bestLead ? Math.max(bestLead.v, 8) : vDes);
-    v.t0 = this.time; v.s0enter = sIns;
-    // 이력은 반드시 실제 투입 위치를 기준으로 채운다. 0 기준으로 채우면
-    // 상류 대기열(음의 station)에 넣은 차가 자기 앞 간격을 음수로 지각해 급제동한다.
-    for (let h = 0; h < HIST; h++) { v.hs[h] = v.s - v.v * (HIST - h) * DT; v.hv[h] = v.v; }
-    this.assignExit(v, 0);
-    this.lanes[best].splice(0, 0, v);
-    this.entered++;
-    this.queueUp = Math.max(0, this.queueUp - 1);
+    this.releaseUpstreamVehicles();
+  }
+
+  /* 유입 차량은 가장 여유가 있는 허용 차로의 상류 대기열에 합류한다. */
+  entryLane(v) {
+    let best = -1, bestScore = -Infinity;
+    const minLane = v.p.heavy ? this.heavyMinLane() : 0;
+    for (let li = minLane; li < this.nLane; li++) {
+      const lead = this.lanes[li][0] || null;
+      const gap = lead ? lead.s - lead.len : 1e5;
+      const score = gap - this.upstreamMeters[li];
+      if (score > bestScore) { bestScore = score; best = li; }
+    }
+    return best;
+  }
+
+  /* 경계에서 실제 차두 간격을 확보한 차량만 차로별 FIFO 순서로 본선에 보낸다.
+     대기 차량 객체를 버리지 않으므로 과포화 유입도 보존된다. */
+  releaseUpstreamVehicles() {
+    const bnd = 0;
+    for (let li = 0; li < this.nLane; li++) {
+      const queue = this.upstreamVehicles[li];
+      const arr = this.lanes[li];
+      while (this.upstreamHead[li] < queue.length) {
+        const v = queue[this.upstreamHead[li]];
+        const lead = arr[0] || null; // 모든 본선 차량은 s >= 0 이다
+        const gap = lead ? lead.s - lead.len - bnd : 1e5;
+        const vDes = Math.min(v.v0own, v.v0lim);
+        const need = v.p.s0 + vDes * v.Tbase * 0.55 + 1.5;
+        if (gap < need) break;
+
+        v.s = bnd; v.lane = li; v.laneT = li;
+        v.u = v.uT = this.laneU(li);
+        v.v = Math.min(vDes, lead ? Math.max(lead.v, 8) : vDes);
+        v.s0enter = bnd;
+        for (let h = 0; h < HIST; h++) {
+          v.hs[h] = v.s - v.v * (HIST - h) * DT;
+          v.hv[h] = v.v;
+        }
+        this.assignExit(v, bnd);
+        arr.splice(this.seek(arr, bnd), 0, v);
+        queue[this.upstreamHead[li]++] = null;
+        this.upstreamMeters[li] = Math.max(0, this.upstreamMeters[li] - v.len - v.p.s0 - 2);
+        this.queueUp--;
+        this.entered++;
+      }
+      if (this.upstreamHead[li] > 1024 && this.upstreamHead[li] * 2 > queue.length) {
+        this.upstreamVehicles[li] = queue.slice(this.upstreamHead[li]);
+        this.upstreamHead[li] = 0;
+      } else if (this.upstreamHead[li] === queue.length) {
+        this.upstreamVehicles[li] = [];
+        this.upstreamHead[li] = 0;
+      }
+    }
   }
 
   /* ---------- 램프 ---------- */
@@ -933,11 +1007,6 @@ class Corridor {
         if (v.obstacle) continue;
         let out = false, exitedHere = null;
         if (v.s >= this.L - 5) out = true;
-        // 창 밖으로 벗어난 차는 지운다 (플레이어 뒤로 멀어졌거나 너무 앞서 나간 차)
-        if (!out && !v.isPlayer && this.focusS != null) {
-          const d = v.s - this.focusS;
-          if (d < -SIM_BACK - 150 || d > SIM_AHEAD + 250) { out = true; }
-        }
         // 유출 램프에서 빠져나감 (부가차로에 있고 노즈를 지났을 때)
         if (!out && isFinite(v.exitS) && li === this.nLane && v.s >= v.exitS - 2 && v.s < v.exitS + 120) {
           out = true;
@@ -1039,9 +1108,10 @@ class Corridor {
     // 시공간 속도장
     this.cellLen = 100;
     this.nCell = Math.ceil(this.L / this.cellLen);
-    this.stRows = [];                  // 각 행 = 한 시각의 셀별 평균속도
+    this.stRows = [];                  // 각 행: 차로별 셀 속도 (lane * nCell + cell)
+    this.stQueueRows = [];             // 같은 시각의 차로별 가상 상류 대기 길이 (m)
     this.stAcc = 0; this.stPeriod = 3;
-    this.maxRows = 480;
+    this.maxRows = 2400;               // 최대 2시간 이력
   }
 
   sampleDetectors(dt) {
@@ -1081,18 +1151,27 @@ class Corridor {
     this.stAcc += dt;
     if (this.stAcc >= this.stPeriod) {
       this.stAcc = 0;
-      const sum = new Float32Array(this.nCell), cnt = new Float32Array(this.nCell);
-      for (const arr of this.lanes) {
+      const sum = Array.from({ length: this.nLane }, () => new Float32Array(this.nCell));
+      const cnt = Array.from({ length: this.nLane }, () => new Float32Array(this.nCell));
+      for (let li = 0; li < this.nLane; li++) {
+        const arr = this.lanes[li];
         for (const v of arr) {
           if (v.obstacle) continue;
           const c = clamp(Math.floor(v.s / this.cellLen), 0, this.nCell - 1);
-          sum[c] += v.v; cnt[c]++;
+          sum[li][c] += v.v; cnt[li][c]++;
         }
       }
-      const row = new Float32Array(this.nCell);
-      for (let c = 0; c < this.nCell; c++) row[c] = cnt[c] > 0 ? sum[c] / cnt[c] : -1;
+      const row = new Float32Array(this.nCell * this.nLane);
+      row.fill(-1);
+      for (let li = 0; li < this.nLane; li++) {
+        for (let c = 0; c < this.nCell; c++) {
+          if (cnt[li][c] > 0) row[li * this.nCell + c] = sum[li][c] / cnt[li][c];
+        }
+      }
       this.stRows.push(row);
+      this.stQueueRows.push(Float32Array.from(this.upstreamMeters));
       if (this.stRows.length > this.maxRows) this.stRows.shift();
+      if (this.stQueueRows.length > this.maxRows) this.stQueueRows.shift();
     }
   }
 
@@ -1100,9 +1179,15 @@ class Corridor {
   count() { let n = 0; for (const arr of this.lanes) for (const v of arr) if (!v.obstacle) n++; return n; }
   /** 상류 경계에 밀려 대기 중인 차량 수 */
   upstreamQueue() {
-    const bnd = this.window()[0];
-    let n = 0; for (const arr of this.lanes) for (const v of arr) { if (v.obstacle) continue; if (v.s < bnd) n++; }
-    return n;
+    return this.queueUp;
+  }
+  upstreamQueueByLane() {
+    return this.upstreamVehicles.map((queue, li) =>
+      queue.length - this.upstreamHead[li]);
+  }
+  /** 차로별 상류 대기열의 추정 길이 (차량 길이 + 정지 간격 합) */
+  upstreamQueueLengthByLane() {
+    return this.upstreamMeters.slice();
   }
   /** 특정 위치 주변의 교통 상태 (밀도 veh/km/차로, 평균속도) */
   localState(s, win) {
