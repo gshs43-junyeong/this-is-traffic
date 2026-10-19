@@ -101,6 +101,7 @@ class Vehicle {
     this.pendingLane = -1; this.signalT = 0; this.lcCool = 0; this.decide = rng.next() * 0.4;
     this.exitS = Infinity; this.t0 = 0; this.s0enter = 0;
     this.obstacle = false; this.isPlayer = false; this.brake = 0; this.alive = true;
+    this.phantomTargetV = 0; this.phantomUntil = 0;
     this.dz = 0; this.rampT = 0;
     this.hn = 0; this.hs.fill(0); this.hv.fill(0);
     this.missed = false; this.onRamp = null; this.rs = 0;
@@ -155,6 +156,9 @@ class Corridor {
     this.buildAux();
     this.buildRamps();
     this.precompute();
+    this.phantomRng = new RNG(seed + 65537);
+    this.phantomSites = this.buildPhantomSites();
+    for (const site of this.phantomSites) site.nextAt = this.time + this.phantomDelay(site, this.phantomPressure());
     this.spawnWait = 0;
     // 경계에서 바로 투입할 수 없는 수요차량을 차로별 FIFO 대기열에 보존한다.
     this.upstreamVehicles = Array.from({ length: this.nLane }, () => []);
@@ -234,12 +238,9 @@ class Corridor {
     return smoothstep(Math.min(inT, outT));
   }
 
-  /** 램프 노면 반폭. 노즈에서는 차로 하나(1.8 m)로 좁혀져 가감속차로와 이어지고,
-      멀어질수록 길어깨를 갖춘 온전한 단면(3.3 m)이 된다.
-      끝에서는 다시 좁혀 없앤다 — 사각으로 뚝 끊긴 절단면이 보이지 않게. */
+  /** 램프 노면 반폭. 노즈에서는 1.8 m, 외곽 연결도로에서는 3.3 m 를 유지한다. */
   rampHalf(t) {
-    const w = lerp(1.8, 3.3, clamp(t / 140, 0, 1));
-    return w * smoothstep(clamp((RAMP_LEN - t) / 45, 0, 1));
+    return lerp(1.8, 3.3, clamp(t / 140, 0, 1));
   }
   nLaneAt(s) { return this.nLane + (this.auxAt(s) ? 1 : 0); }
 
@@ -250,17 +251,23 @@ class Corridor {
   /* 램프 평면선형. 노즈에서 1:14 로 떨어져 나가 점점 크게 휘는 3차 곡선이다.
      구간을 나눠 이어 붙이면 이음매에서 기울기가 튀어 꺾여 보이므로,
      전 구간을 하나의 매끄러운(C1) 식으로 둔다. */
+  rampCurve(t) {
+    const x = Math.max(0, t / RAMP_LEN);
+    if (x <= 1) return 0.74 * x + 0.26 * x * x * x;
+    // 램프 끝에서 방향을 갑자기 꺾지 않고, 평행 접속도로 방향으로 부드럽게 편다.
+    const d = Math.min(x - 1, 0.6);
+    return 1 + 1.52 * (d - d * d / 1.2);
+  }
   rampLat(t) {
     const base = this.laneU(this.nLane);
     if (t <= 0) return base;
-    const x = Math.min(t / RAMP_LEN, 1.15);
-    return base + RAMP_OFF * (0.74 * x + 0.26 * x * x * x);
+    return base + RAMP_OFF * this.rampCurve(t);
   }
   /* 램프 종단은 본선보다 아주 조금만 내려간다. 크게 내리면 주변 지형에 묻혀
      화면에서 사라진다 — 실제로도 인터체인지 근처는 완만하게 붙인다. */
   rampDz(t) {
     if (t <= 0) return 0;
-    const x = Math.min(t / RAMP_LEN, 1.15);
+    const x = this.rampCurve(t);
     return -1.5 * x * x;
   }
   /** 본선 갓길 바깥 가장자리 (램프가 여기서부터 모습을 드러낸다) */
@@ -379,6 +386,7 @@ class Corridor {
   /* =========================== 스텝 =========================== */
   step(dt, player) {
     this.time += dt;
+    this.updateFeaturePhantomJams();
     // 고정된 전체 구간을 계산한다. 플레이어가 멀어져도 차량과 정체파는 계속 남는다.
     if (this.filledTo == null) this.filledTo = this.L;
     if (this.L > this.filledTo + 60) {
@@ -487,6 +495,12 @@ class Corridor {
     const grade = this.gradeAt(s);
     const aFree = p.powEff / (v.v > 4 ? v.v : 4) - p.CrG - p.dragK * v.v * v.v - GRAV * grade;
     if (acc > aFree) acc = aFree;
+    // 구조물·합류부 접근에서 확률적으로 시작된 짧은 선행차 감속.
+    // 속도를 순간 변경하지 않고 완만한 감속 목표를 주어 추종 차량이 파동을 키운다.
+    if (v.phantomUntil > this.time && v.v > v.phantomTargetV) {
+      const aPhantom = clamp((v.phantomTargetV - v.v) * 0.85, -2.2, -0.25);
+      if (aPhantom < acc) acc = aPhantom;
+    }
     // 유색잡음 (Ornstein-Uhlenbeck)
     const tauN = 6;
     v.eta += (-v.eta / tauN) * DT + p.aNoise * this.cfg.noise * NOISE_K * this.rng.normalFast();
@@ -771,18 +785,135 @@ class Corridor {
     return n;
   }
 
-  /* 물리적 병목 없이 임계 교통류의 불안정성을 관찰하기 위한 유한 초기 속도 교란.
-     매개변수나 희망속도는 바꾸지 않고, 같은 위치의 차량 속도만 한 번 낮춘 뒤
-     평상시 추종식에 맡겨 파동의 성장·소멸을 관찰한다. */
-  seedPhantomPerturbation() {
-    const s0 = this.L * 0.55, s1 = s0 + 180;
+  /* 터널·교량·IC·긴 경사 접근부를 유령정체 발생 후보로 만든다.
+     사이트 위치는 각 시설의 상류에 놓고, 가까운 후보는 하나로 합친다. */
+  buildPhantomSites() {
+    const raw = [];
+    for (const st of this.road.structs) {
+      const s0 = this.dir > 0 ? st.s0 : this.L - st.s1;
+      raw.push({
+        s: s0 - (st.type === 'tunnel' ? 240 : 180),
+        kind: st.type,
+        weight: st.type === 'tunnel' ? 1.2 : 0.95,
+      });
+    }
+    for (const ic of this.icLocal) {
+      raw.push({ s: ic.s - 470, kind: 'interchange-exit', weight: 0.9 });
+      raw.push({ s: ic.s + ON_GORE - 300, kind: 'interchange-merge', weight: 1.3 });
+    }
+
+    const ds = 16;
+    let runS = -1, gradeSum = 0, gradeN = 0;
+    const addGradeRun = (endS) => {
+      if (runS >= 0 && endS - runS >= 260) {
+        const meanGrade = gradeSum / Math.max(gradeN, 1);
+        raw.push({
+          s: runS - 100,
+          kind: meanGrade >= 0 ? 'uphill' : 'downhill',
+          weight: meanGrade >= 0 ? 1.35 : 0.85,
+        });
+      }
+      runS = -1; gradeSum = 0; gradeN = 0;
+    };
+    for (let s = 0; s <= this.L; s += ds) {
+      const g = this.gradeAt(s);
+      if (Math.abs(g) >= 0.028) {
+        if (runS < 0) runS = s;
+        gradeSum += g; gradeN++;
+      } else addGradeRun(s);
+    }
+    addGradeRun(this.L);
+
+    raw.sort((a, b) => a.s - b.s);
+    const sites = [];
+    for (const c of raw) {
+      if (c.s < 500 || c.s > this.L - 300) continue;
+      const prev = sites[sites.length - 1];
+      if (prev && c.s - prev.s < 420) {
+        prev.weight = Math.min(2.2, prev.weight + c.weight * 0.22);
+        if (c.weight > prev.weight * 0.55) prev.kind += '+' + c.kind;
+      } else sites.push({ ...c });
+    }
+    return sites;
+  }
+
+  phantomPressure() {
+    const qPerLane = this.demandNow() / Math.max(this.nLane, 1) * (1 + (this.cfg.rampPct || 0) / 100 * 0.35);
+    return clamp((qPerLane - 1250) / 750, 0, 1);
+  }
+
+  phantomDelay(site, pressure) {
+    const ratePerHour = 0.30 * site.weight * (0.35 + 1.1 * pressure);
+    return this.phantomRng.exp(3600 / Math.max(ratePerHour, 0.02));
+  }
+
+  seedPhantomAtSite(site) {
+    const band = 155;
+    const groups = [];
     for (let li = 0; li < this.nLane; li++) {
-      for (const v of this.lanes[li]) {
-        if (v.obstacle || v.isPlayer || v.s < s0 || v.s > s1) continue;
-        v.v = Math.max(5, v.v * this.rng.range(0.58, 0.72));
-        v.a = 0;
+      const arr = this.lanes[li];
+      const k0 = this.seek(arr, site.s - band), k1 = this.seek(arr, site.s + band);
+      const group = [];
+      for (let i = k0; i < k1; i++) {
+        const v = arr[i];
+        if (v.obstacle || v.isPlayer || v.v < 7 || v.phantomUntil > this.time) continue;
+        group.push(v);
+      }
+      if (!group.length) return 0; // seed all 주행차로에 파동을 동시에 심을 수 있을 때만 발동
+      groups.push(group);
+    }
+
+    let count = 0;
+    for (const group of groups) {
+      for (const v of group) {
+        const target = Math.max(5.5, Math.min(v.v * this.phantomRng.range(0.50, 0.68), v.v0own * 0.55));
+        v.phantomTargetV = target;
+        v.phantomUntil = this.time + this.phantomRng.range(8, 15);
+        count++;
       }
     }
+    if (count) site.events = (site.events || 0) + 1;
+    return count;
+  }
+
+  seedFeaturePhantomJams(force) {
+    if (!this.phantomSites.length) return 0;
+    const pressure = this.phantomPressure();
+    if (!force && !this.phantomRng.chance(0.08 + 0.72 * pressure)) return 0;
+    const candidates = this.phantomSites.slice();
+    let seeded = 0;
+    const targetCount = force && pressure > 0.8 ? 2 : 1;
+    while (candidates.length && seeded < targetCount) {
+      let total = 0;
+      for (const site of candidates) total += site.weight;
+      let pick = this.phantomRng.next() * total, index = candidates.length - 1;
+      for (let i = 0; i < candidates.length; i++) {
+        pick -= candidates[i].weight;
+        if (pick <= 0) { index = i; break; }
+      }
+      const site = candidates.splice(index, 1)[0];
+      if (this.seedPhantomAtSite(site)) {
+        site.nextAt = this.time + this.phantomDelay(site, pressure);
+        seeded++;
+      }
+    }
+    return seeded;
+  }
+
+  updateFeaturePhantomJams() {
+    if (!this.phantomSites.length) return;
+    const pressure = this.phantomPressure();
+    for (const site of this.phantomSites) {
+      if (this.time < site.nextAt) continue;
+      site.nextAt = this.time + this.phantomDelay(site, pressure);
+      if (pressure < 0.12 || !this.phantomRng.chance(0.08 + 0.82 * pressure)) continue;
+      this.seedPhantomAtSite(site);
+    }
+  }
+
+  /* 유령정체 프리셋은 무작위 상류 후보에서 시작 파동을 반드시 하나 만든다. */
+  seedPhantomPerturbation() {
+    return this.seedFeaturePhantomJams(true);
   }
 
   /** [s0, s1] 구간을 목표 밀도로 채운다 */

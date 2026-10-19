@@ -16,6 +16,9 @@ const SKY = {
   night: { top: '#050912', bot: '#101a2c', haze: '#141d31', amb: 0.30, sun: 0.10, road: '#26262b', grass: '#26301f', rock: '#33302c', water: '#1b2a38' },
 };
 
+// 램프 노면은 운행 구간 뒤에도 화면의 소실점까지 접속도로로 이어 그린다.
+const RAMP_VISUAL_EXTENSION = 1100;
+
 const Render = {
   ctx: null, W: 0, H: 0,
   fov: 58 * Math.PI / 180,
@@ -63,7 +66,7 @@ const Render = {
   },
   /** 근평면 클리핑 후 화면 경로를 만든다. 그릴 것이 없으면 false */
   path() {
-    const NEAR = 0.55, n = this._n;
+    const NEAR = 0.12, n = this._n;
     if (n < 3) return false;
     const ax = this._ax, ay = this._ay, az = this._az;
     const bx = this._bx, by = this._by, bz = this._bz;
@@ -97,7 +100,7 @@ const Render = {
   point(x, y, z) {
     const dx = x - this.cx, dy = y - this.cy, dz = z - this.cz;
     const cz = dx * this.fx + dy * this.fy + dz * this.fz;
-    if (cz < 0.6) return null;
+    if (cz < 0.12) return null;
     const cxx = dx * this.rx + dy * this.ry + dz * this.rz;
     const cyy = dx * this.ux + dy * this.uy + dz * this.uz;
     const iz = this.focal / cz;
@@ -235,11 +238,11 @@ const Scene = {
         const e = AR[i], corr = e.corr;
         const sl = corr.dir > 0 ? sRoad : corr.L - sRoad;
         const t = e.on ? (e.s - sl) : (sl - e.s);
-        if (t < -260 || t > corr.rampLen + 260) continue;
+        if (t < -260 || t > corr.rampLen + RAMP_VISUAL_EXTENSION) continue;
         s.nearIC = true;
         // 노즈 앞뒤 여유 구간에서도 경계를 기록해 둔다. 여기서 끊지 않으면
         // 가까운 스트립의 넓은 비탈면이 저 앞의 램프를 덮어 버린다.
-        const tc = clamp(t, 0, corr.rampLen);
+        const tc = clamp(t, 0, corr.rampLen + RAMP_VISUAL_EXTENSION);
         const inU = corr.rampLat(tc) - corr.rampHalf(tc);
         const outU = corr.rampLat(tc) + corr.rampHalf(tc) + 1.6;
         // 지면 띠는 본선 갓길 바깥에서 시작해 램프 안쪽 경계에서 끝난다.
@@ -285,13 +288,24 @@ const Scene = {
     while (s < s1) {
       stations.push(s);
       const d = Math.abs(s - sc.sCam);
-      s += d < 60 ? 4 : d < 170 ? 7 : d < 380 ? 13 : d < 700 ? 26 : 42;
+      const step = d < 60 ? 4 : d < 170 ? 7 : d < 380 ? 13 : d < 700 ? 26 : 42;
+      s += rd.struct[rd.idxOf(s)] === 2 ? Math.min(step, 12) : step;
     }
     stations.push(Math.min(s1, rd.len - 0.01));
+    // 터널·교량 경계는 스트립 간격과 무관하게 정확한 지점에서 끊어 포털 틈을 막는다.
+    for (const st of rd.structs) {
+      if (st.s0 > s0 && st.s0 < s1) stations.push(st.s0);
+      if (st.s1 > s0 && st.s1 < s1) stations.push(st.s1);
+    }
+    stations.sort((a, b) => a - b);
+    for (let i = stations.length - 1; i > 0; i--) {
+      if (stations[i] - stations[i - 1] < 0.01) stations.splice(i, 1);
+    }
 
-    // 차량을 스트립 구간별로 담는다 (램프 위 차량은 따로 모아 나중에 그린다)
+    // 차량을 스트립 구간별로 담는다. 램프와 카메라 가까이 있는 차는 지면에
+    // 다시 덮이지 않도록 월드 표면을 다 그린 뒤 마지막에 그린다.
     const buckets = new Array(stations.length);
-    this.rampVeh = [];
+    this.lateVeh = [];
     const addVeh = (corr) => {
       if (!corr) return;
       for (let li = 0; li < corr.lanes.length; li++) {
@@ -310,8 +324,9 @@ const Scene = {
       if (!corr) continue;
       const sCamL = corr.dir > 0 ? sc.sCam : corr.L - sc.sCam;
       const lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
-      for (const r of corr.onRamps) if (r.s > lo && r.s - corr.rampLen < hi) near.push({ corr, s: r.s, on: 1 });
-      for (const o of corr.offRamps) if (o.s + corr.rampLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
+      const rampDrawLen = corr.rampLen + RAMP_VISUAL_EXTENSION;
+      for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1 });
+      for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
     }
     this.activeRamps = near;
 
@@ -342,10 +357,10 @@ const Scene = {
         const d = Math.abs(stations[i] - sc.sCam);
         this.rampSurf(ctx, secs[i], secs[i + 1], d, sc);
       }
-      if (this.rampVeh.length) {
-        this.rampVeh.sort((p, q) => q.d - p.d);
-        for (const e of this.rampVeh) this.vehicle(ctx, e.v, e.corr, sc);
-      }
+    }
+    if (this.lateVeh.length) {
+      this.lateVeh.sort((p, q) => q.d - p.d);
+      for (const e of this.lateVeh) this.vehicle(ctx, e.v, e.corr, sc);
     }
   },
 
@@ -360,8 +375,8 @@ const Scene = {
     const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
     const d = Render.depth(g.x + nx * u, g.y + ny * u, g.z + 1 + (v.dz || 0));
-    if (d < 0.5) return;
-    if (v.onRamp || v.lane === -1) this.rampVeh.push({ v, corr, d });
+    if (d < 0.12) return;
+    if (v.onRamp || v.lane === -1 || d < 24) this.lateVeh.push({ v, corr, d });
     else (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d, g, u });
   },
 
@@ -480,7 +495,7 @@ const Scene = {
       예전처럼 안쪽 경계를 갓길 바깥선에 고정하면, 노즈 앞 60 m 가 실 한 가닥으로
       줄었다 사라져 도로가 끊긴 것처럼 보였다. */
   rampSeg(ctx, a, b, dist, corr, ta, tb, sc) {
-    const LEN = corr.rampLen;
+    const LEN = corr.rampLen + RAMP_VISUAL_EXTENSION;
     if ((ta < 0 && tb < 0) || (ta > LEN && tb > LEN)) return;
     const t0 = clamp(ta, 0, LEN), t1 = clamp(tb, 0, LEN);
     if (Math.abs(t0 - t1) < 0.01) return;
@@ -751,13 +766,24 @@ const Scene = {
   /** 터널 구간 위를 덮는 산 — 지형면 + 양쪽 옆구리 */
   mountain(ctx, a, b, dist) {
     const pal = this.pal;
-    const hw = a.hw + 0.6, ext = 190, N = 9;
+    const hw = a.hw + 0.6, ext = 190, N = 19;
+    const boresA = this.bores(a).map(([u0, u1]) => this.boreGeom(u0, u1));
+    const boresB = this.bores(b).map(([u0, u1]) => this.boreGeom(u0, u1));
+    const coveredTerrain = (sec, geos, u) => {
+      let z = this.terrAt(sec, u);
+      // 절토면이 굴 안쪽 아치보다 낮아지는 횡단 골을 메워 지형이 통행 공간에 솟지 않게 한다.
+      for (const g of geos) {
+        const span = this.boreSpan(g, u);
+        if (span) z = Math.max(z, sec.g.z + this.road.crossZ(sec.g, u) + span[1] + 0.8);
+      }
+      return z;
+    };
     const uL = -(hw + ext), uR = hw + ext;
     // 산등성이 표면
     for (let i = 0; i < N; i++) {
       const u0 = lerp(uL, uR, i / N), u1 = lerp(uL, uR, (i + 1) / N);
-      const za0 = this.terrAt(a, u0), za1 = this.terrAt(a, u1);
-      const zb0 = this.terrAt(b, u0), zb1 = this.terrAt(b, u1);
+      const za0 = coveredTerrain(a, boresA, u0), za1 = coveredTerrain(a, boresA, u1);
+      const zb0 = coveredTerrain(b, boresB, u0), zb1 = coveredTerrain(b, boresB, u1);
       const rise = ((za0 + za1) / 2) - a.g.z;
       const col = this.haze(rise > 24 ? mixHex(pal.grass, pal.rock, clamp((rise - 24) / 40, 0, 0.7)) : pal.grass, dist);
       this.quad(this.ptZ(a, u0, za0), this.ptZ(b, u0, zb0), this.ptZ(b, u1, zb1), this.ptZ(a, u1, za1), col);
@@ -986,7 +1012,7 @@ const Scene = {
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
     const bx = g.x + nx * u, by = g.y + ny * u, bz = g.z + rd.crossZ(g, u) + (v.dz || 0);
     const dist = Render.depth(bx, by, bz);
-    if (dist < 0.4 || dist > Render.drawDist + 60) return;
+    if (dist < 0.08 || dist > Render.drawDist + 60) return;
 
     const p = v.p;
     const ch = Math.cos(hdg), sh = Math.sin(hdg);

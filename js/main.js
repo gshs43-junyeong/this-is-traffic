@@ -15,7 +15,7 @@ const CFG_DEFAULT = {
   incidentRate: 0.5,   // 돌발상황 건/시
   reactionTime: 0.5,   // 지각 반응시간 s
   noise: 1.0,          // 가속도 잡음 배율
-  phantomSeed: false,   // 무병목 유령정체 프리셋의 초기 교란
+  phantomSeed: false,   // 유령정체 프리셋에서 구조물 접근부 초기 교란을 강제
   laneRule: true,      // 지정차로제
   weather: 'dry',      // dry | rain
   peak: false,         // 첨두 수요 프로파일
@@ -76,8 +76,9 @@ const App = {
     // 전체 노선을 설정 수요로 채우고, 짧게 돌려 초기 교통류를 안정시킨다
     this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
     this.warm(30);
-    // 초기 안정화가 끝난 뒤 교란을 넣어 첫 화면부터 성장 과정을 볼 수 있게 한다.
-    if (c.phantomSeed) this.corrA.seedPhantomPerturbation();
+    // 안정화 뒤 시설 상류에서 확률적으로 교란을 시작한다. 프리셋은 발생을 보장한다.
+    this.corrA.seedFeaturePhantomJams(c.phantomSeed);
+    if (this.corrB) this.corrB.seedFeaturePhantomJams(c.phantomSeed);
     UI.toast(this.roadSummary(), 5);
   },
   roadSummary() {
@@ -141,7 +142,8 @@ const App = {
     arr.splice(this.corrA.seek(arr, this.player.s), 0, this.player);
     this.corrA.prefill(); if (this.corrB) this.corrB.prefill();
     this.warm(25);
-    if (c.phantomSeed) this.corrA.seedPhantomPerturbation();
+    this.corrA.seedFeaturePhantomJams(c.phantomSeed);
+    if (this.corrB) this.corrB.seedFeaturePhantomJams(c.phantomSeed);
   },
 
   /* ---------- 프리셋 ---------- */
@@ -157,7 +159,7 @@ const App = {
         this.rebuild(); UI.toast('임계 상태 — 수요와 램프 합류로 작은 파동을 관찰', 4); return;
       case 'phantom':
         set({ demand: 1950, rampPct: 0, incidentRate: 0, peak: false, noise: 1.6, reactionTime: 0.8, phantomSeed: true });
-        this.rebuild(); UI.toast('유령정체 — 병목 없이 전 차로의 초기 교란에서 파동이 성장', 4); return;
+        this.rebuild(); UI.toast('유령정체 — 터널·IC·교량·경사 상류에서 시작한 전 차로 파동', 4); return;
       case 'jam':
         set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
         this.rebuild(); UI.toast('혼잡 — 과포화 유입과 합류 병목', 4); return;
