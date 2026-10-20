@@ -74,9 +74,10 @@ const DT = 0.04;                 // 물리 적분 간격 (s)
 const NOISE_K = Math.sqrt(2 * DT / 6);   // OU 잡음 확산항 계수 (tau = 6 s)
 const U_LERP = 1 - Math.exp(-DT / 0.62);  // 횡방향 접근 계수
 const HIST = 48;                 // 지각지연용 이력 버퍼 길이 (48 * 0.04 = 1.92 s)
-const RAMP_LEN = 340;            // 램프 연장 (m)
+const RAMP_LEN = 450;            // 진출·진입 곡선 길이 (m)
 const RAMP_OFF = 33;             // 램프 종점의 본선 이격 (m)
-const ON_GORE = 780;             // 진출 노즈에서 진입 노즈까지 (m)
+const ACCEL_LEN = 450;           // 진입 가속차로 길이 (m)
+const ON_GORE = RAMP_LEN * 2;    // 램프 두 곡선이 바깥 접속점에서 만나도록 배치
 
 let _vid = 1;
 
@@ -186,10 +187,9 @@ class Corridor {
       if (sl < 900 || sl > L - 1400) continue;
       this.icLocal.push({ s: sl, name: ic.name, rest: ic.rest });
       raw.push({ s0: sl - 320, s1: sl, type: 'decel', ic: sl });        // 감속차로
-      /* 진출로는 [ic, ic+340], 진입로는 [ic+440, ic+780] 을 쓴다.
-         예전처럼 진입 노즈를 ic+380 에 두면 두 램프가 300 m 나 겹쳐
-         같은 자리에 두 번 그려지면서 도로가 끊긴 것처럼 보였다. */
-      raw.push({ s0: sl + ON_GORE, s1: sl + ON_GORE + 320, type: 'accel', ic: sl });  // 가속차로
+      // 진출 램프 끝과 진입 램프 시작은 같은 바깥 접속점에서 만나며,
+      // 가속차로는 합류 뒤 450 m 를 확보한다.
+      raw.push({ s0: sl + ON_GORE, s1: sl + ON_GORE + ACCEL_LEN, type: 'accel', ic: sl });
     }
     this.icLocal.sort((a, b) => a.s - b.s);
 
@@ -245,18 +245,10 @@ class Corridor {
   nLaneAt(s) { return this.nLane + (this.auxAt(s) ? 1 : 0); }
 
   /* ---------- 램프 ----------
-     노즈(gore)에서 t 만큼 떨어진 지점의 횡거와 높이차.
-     처음 80 m 는 1:16 테이퍼로 갈라지고, 그 뒤로는 일정 곡률(2차 곡선)로 벌어진다.
-     실제 다이아몬드형 인터체인지의 진출입로가 이 모양이다. */
-  /* 램프 평면선형. 노즈에서 1:14 로 떨어져 나가 점점 크게 휘는 3차 곡선이다.
-     구간을 나눠 이어 붙이면 이음매에서 기울기가 튀어 꺾여 보이므로,
-     전 구간을 하나의 매끄러운(C1) 식으로 둔다. */
+     노즈에서 평행 접속점까지의 횡거와 높이차. 곡선 양 끝의 접선은 본선과 나란하다. */
   rampCurve(t) {
-    const x = Math.max(0, t / RAMP_LEN);
-    if (x <= 1) return 0.74 * x + 0.26 * x * x * x;
-    // 램프 끝에서 방향을 갑자기 꺾지 않고, 평행 접속도로 방향으로 부드럽게 편다.
-    const d = Math.min(x - 1, 0.6);
-    return 1 + 1.52 * (d - d * d / 1.2);
+    const x = clamp(t / RAMP_LEN, 0, 1);
+    return x * x * (3 - 2 * x);
   }
   rampLat(t) {
     const base = this.laneU(this.nLane);
@@ -280,7 +272,7 @@ class Corridor {
       const acc = this.auxAt(ic.s + ON_GORE + 40);
       this.onRamps.push({
         s: ic.s + ON_GORE, name: ic.name, queue: [], len: RAMP_LEN, wait: 0, served: 0, rejected: 0,
-        auxEnd: acc ? acc.s1 : ic.s + ON_GORE + 320, qDelay: 0,
+        auxEnd: acc ? acc.s1 : ic.s + ON_GORE + ACCEL_LEN, qDelay: 0,
       });
       this.offRamps.push({ s: ic.s, name: ic.name, taken: 0, out: [] });
     }
@@ -522,9 +514,11 @@ class Corridor {
       const a = this.auxAt(v.s);
       if (this.isExiting(v, a)) continue;      // 빠져나가는 차는 자리를 청하지 않는다
       const end = a ? a.s1 : v.s;
-      const urg = clamp(1 - (end - v.s) / 260, 0, 1);
-      if (urg < 0.20) continue;
-      this.requestYield(v, this.nLane - 1, urg);
+      const merge = a && a.type === 'accel';
+      const urg = clamp(1 - (end - v.s) / (merge ? 620 : 260), 0, 1);
+      if (urg < (merge ? 0.12 : 0.20)) continue;
+      // 램프 차량에게는 본선 뒤차가 실제로 간격을 열어 주도록 합류 우선권을 준다.
+      this.requestYield(v, this.nLane - 1, urg, merge && urg > 0.20);
     }
     for (let n = 0; n < this.incidents.length; n++) {
       const inc = this.incidents[n];
@@ -539,12 +533,12 @@ class Corridor {
       }
     }
   }
-  requestYield(v, tl, urg) {
+  requestYield(v, tl, urg, priority) {
     if (tl < 0 || tl >= this.lanes.length) return;
     const arr = this.lanes[tl];
     const k = this.seek(arr, v.s);
     const foll = arr[k - 1];
-    if (!foll || foll.obstacle || !foll.courteous) return;
+    if (!foll || foll.obstacle || (!foll.courteous && !priority)) return;
     if (v.s - foll.s > 75) return;
     if (foll.yieldStamp === this.stepId && foll.yieldUrg >= urg) return;
     foll.yieldStamp = this.stepId; foll.yieldTo = v; foll.yieldUrg = urg;
@@ -616,18 +610,25 @@ class Corridor {
       const arr = this.lanes[tl];
       const k = this.seek(arr, v.s);
       const lead = arr[k] || null, foll = arr[k - 1] || null;
-      // 물리적으로 들어갈 자리가 있어야 한다
-      if (lead && lead.s - v.s - lead.len < 0.6) continue;
-      if (foll && v.s - foll.s - v.len < 0.6) continue;
+      const dirLC = tl > cur ? 1 : -1;
+      const urg = (mand.dir === dirLC) ? mand.urg : 0;
+      const mergeAux = cur === this.nLane ? this.auxAt(v.s) : null;
+      const mergeLane = !!mergeAux && mergeAux.type === 'accel' && mand.dir === dirLC;
+      const followerYielding = !!foll && foll.yieldStamp === this.stepId && foll.yieldTo === v;
+      const forcedMerge = mergeLane && urg >= 0.65 && (!foll || followerYielding);
+      // 보통 차로변경은 간격을 지킨다. 합류차에 뒤차가 양보한 경우에는
+      // 속도에 맞는 최소 여유만 확인하고, 정체된 가속차로 끝에서 막히지 않게 한다.
+      const minFront = forcedMerge ? Math.max(2, v.v * 0.35) : 0.6;
+      const minBack = forcedMerge ? Math.max(2, foll ? foll.v * 0.25 : 0) : 0.6;
+      if (lead && lead.s - v.s - lead.len < minFront) continue;
+      if (foll && v.s - foll.s - v.len < minBack) continue;
 
       const aNew = this.mobilAccel(v, lead, v.s, v.v);
       const aNewF = foll && !foll.obstacle ? this.mobilAccel(foll, lead, foll.s, foll.v) : 0;
       const aNewFn = foll && !foll.obstacle ? this.mobilAccel(foll, v, foll.s, foll.v) : 0;
 
-      const dirLC = tl > cur ? 1 : -1;
-      const urg = (mand.dir === dirLC) ? mand.urg : 0;
       const bSafe = lerp(MOBIL.bSafe, 9.5, urg) * (foll && foll.p.heavy ? 0.8 : 1);
-      if (foll && !foll.obstacle && aNewFn < -bSafe) continue;
+      if (foll && !foll.obstacle && aNewFn < -bSafe && !followerYielding) continue;
       if (foll && foll.obstacle) continue;
       if (lead && lead.obstacle && lead.s - v.s < 120) continue;   // 사고 차로로는 안 들어간다
 
@@ -645,7 +646,8 @@ class Corridor {
       const p = v.p.politeness;
       const gain = (aNew - aCur) + p * ((aNewFn - aNewF) + (aOldFn - aOldF)) - bias;
       const thr = MOBIL.dAth / v.aggr;
-      if (gain > thr && gain > bestGain) { bestGain = gain; bestLane = tl; }
+      const acceptedGain = forcedMerge ? Math.max(gain, thr + 0.01) : gain;
+      if (acceptedGain > thr && acceptedGain > bestGain) { bestGain = acceptedGain; bestLane = tl; }
     }
     if (v.pendingLane >= 0 && v.pendingLane !== bestLane) {
       v.pendingLane = -1; v.signalT = 0; v.blink = 0;
@@ -679,7 +681,8 @@ class Corridor {
       const a = this.auxAt(v.s);
       if (this.isExiting(v, a)) return { dir: 0, urg: 0 };
       const end = a ? a.s1 : v.s;
-      urg = clamp(1 - (end - v.s) / 260, 0, 1);
+      const merge = a && a.type === 'accel';
+      urg = clamp(1 - (end - v.s) / (merge ? 620 : 260), 0, 1);
       return { dir: -1, urg: Math.max(urg, 0.15) };
     }
     // (b) 유출 예정

@@ -16,8 +16,8 @@ const SKY = {
   night: { top: '#050912', bot: '#101a2c', haze: '#141d31', amb: 0.30, sun: 0.10, road: '#26262b', grass: '#26301f', rock: '#33302c', water: '#1b2a38' },
 };
 
-// 램프 노면은 운행 구간 뒤에도 화면의 소실점까지 접속도로로 이어 그린다.
-const RAMP_VISUAL_EXTENSION = 1100;
+// 본선 형상과 램프의 실제 접속 범위만 그린다.
+const RAMP_VISUAL_EXTENSION = 0;
 
 const Render = {
   ctx: null, W: 0, H: 0,
@@ -238,10 +238,9 @@ const Scene = {
         const e = AR[i], corr = e.corr;
         const sl = corr.dir > 0 ? sRoad : corr.L - sRoad;
         const t = e.on ? (e.s - sl) : (sl - e.s);
-        if (t < -260 || t > corr.rampLen + RAMP_VISUAL_EXTENSION) continue;
+        if (t < 0 || t > corr.rampLen + RAMP_VISUAL_EXTENSION) continue;
         s.nearIC = true;
-        // 노즈 앞뒤 여유 구간에서도 경계를 기록해 둔다. 여기서 끊지 않으면
-        // 가까운 스트립의 넓은 비탈면이 저 앞의 램프를 덮어 버린다.
+        // 램프가 실제로 놓인 구간에서만 비탈면을 잘라 노면을 보존한다.
         const tc = clamp(t, 0, corr.rampLen + RAMP_VISUAL_EXTENSION);
         const inU = corr.rampLat(tc) - corr.rampHalf(tc);
         const outU = corr.rampLat(tc) + corr.rampHalf(tc) + 1.6;
@@ -296,6 +295,15 @@ const Scene = {
     for (const st of rd.structs) {
       if (st.s0 > s0 && st.s0 < s1) stations.push(st.s0);
       if (st.s1 > s0 && st.s1 < s1) stations.push(st.s1);
+    }
+    // 램프의 실제 시작·끝을 단면 경계와 맞춰 지형 절단과 접속부 틈을 막는다.
+    for (const e of near) {
+      const len = e.corr.rampLen + RAMP_VISUAL_EXTENSION;
+      const ends = e.on ? [e.s - len, e.s] : [e.s, e.s + len];
+      for (const localS of ends) {
+        const roadS = e.corr.dir > 0 ? localS : e.corr.L - localS;
+        if (roadS > s0 && roadS < s1) stations.push(roadS);
+      }
     }
     stations.sort((a, b) => a - b);
     for (let i = stations.length - 1; i > 0; i--) {
@@ -408,22 +416,22 @@ const Scene = {
         // 비탈면은 6 m 넘게 깎아낸 자리만 암반색으로 두고, 나머지는 초지로 덮는다
         const slopeCol = (dz) => this.haze(dz > 6 ? mixHex(pal.grass, pal.rock, clamp((dz - 6) / 12, 0, 0.85)) : pal.grass, dist);
         // 오른쪽 — 램프가 있으면 램프 안쪽 경계에서 멈춘다
-        const rIn = (a.rampR || b.rampR) ? Math.min((a.rampR || b.rampR).in, (b.rampR || a.rampR).in) - 0.2 : null;
-        const dRa = rIn != null ? Math.min(a.dayR, rIn) : a.dayR;
-        const dRb = rIn != null ? Math.min(b.dayR, rIn) : b.dayR;
-        const zRa = rIn != null && dRa < a.dayR ? a.g.z : a.dayRz;
-        const zRb = rIn != null && dRb < b.dayR ? b.g.z : b.dayRz;
+        const rInA = a.rampR ? a.rampR.in : null, rInB = b.rampR ? b.rampR.in : null;
+        const dRa = rInA != null ? Math.min(a.dayR, rInA) - 0.2 : a.dayR;
+        const dRb = rInB != null ? Math.min(b.dayR, rInB) - 0.2 : b.dayR;
+        const zRa = rInA != null && dRa < a.dayR ? a.g.z : a.dayRz;
+        const zRb = rInB != null && dRb < b.dayR ? b.g.z : b.dayRz;
         if (dRa > a.aSh + 0.2 || dRb > b.aSh + 0.2) {
           this.quad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
             this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z));
         }
-        if (rIn == null) {
+        if (rInA == null && rInB == null) {
           this.quad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
             this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90)),
             this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), gc);
         } else {
-          // 램프 바깥쪽 지면 — 램프 노면 끝에서 다시 이어 붙인다
-          const oA = (a.rampR || b.rampR).out, oB = (b.rampR || a.rampR).out;
+          // 경계가 없는 쪽은 본선 비탈끝을 써서 램프 시작·끝의 지형을 삼각형으로 잇는다.
+          const oA = a.rampR ? a.rampR.out : a.dayR, oB = b.rampR ? b.rampR.out : b.dayR;
           for (const [w0, w1] of [[2, 40], [40, 150]]) {
             this.quad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
               this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), gc);
@@ -431,21 +439,21 @@ const Scene = {
         }
 
         // 왼쪽 — 반대편 차도의 램프도 같은 방식으로
-        const lIn = (a.rampL || b.rampL) ? Math.max((a.rampL || b.rampL).in, (b.rampL || a.rampL).in) + 0.2 : null;
-        const dLa = lIn != null ? Math.max(a.dayL, lIn) : a.dayL;
-        const dLb = lIn != null ? Math.max(b.dayL, lIn) : b.dayL;
-        const zLa = lIn != null && dLa > a.dayL ? a.g.z : a.dayLz;
-        const zLb = lIn != null && dLb > b.dayL ? b.g.z : b.dayLz;
+        const lInA = a.rampL ? a.rampL.in : null, lInB = b.rampL ? b.rampL.in : null;
+        const dLa = lInA != null ? Math.max(a.dayL, lInA) + 0.2 : a.dayL;
+        const dLb = lInB != null ? Math.max(b.dayL, lInB) + 0.2 : b.dayL;
+        const zLa = lInA != null && dLa > a.dayL ? a.g.z : a.dayLz;
+        const zLb = lInB != null && dLb > b.dayL ? b.g.z : b.dayLz;
         if (dLa < a.bSh - 0.2 || dLb < b.bSh - 0.2) {
           this.quad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
             this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z));
         }
-        if (lIn == null) {
+        if (lInA == null && lInB == null) {
           this.quad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
             this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
             this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), gc);
         } else {
-          const oA = (a.rampL || b.rampL).out, oB = (b.rampL || a.rampL).out;
+          const oA = a.rampL ? a.rampL.out : a.dayL, oB = b.rampL ? b.rampL.out : b.dayL;
           for (const [w0, w1] of [[2, 40], [40, 150]]) {
             this.quad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
               this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), gc);
