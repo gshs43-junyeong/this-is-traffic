@@ -517,7 +517,7 @@ class Road {
       const f = z0 - T(x0 + nx * halfW, y0 + ny * halfW);
       const slope = f >= 0 ? -1 / 1.8 : 1 / 1.2;            // 성토 1:1.8 / 절토 1:1.2
       let d = halfW, zz = z0;
-      for (let k = 0; k < 26; k++) {
+      for (let k = 0; k < 60; k++) {          // 최대 240 m — 옆으로 꺼지는 골짜기도 만나게
         const nd = d + 4;
         const zr = z0 + slope * (nd - halfW);
         const zg = T(x0 + nx * nd, y0 + ny * nd);
@@ -530,6 +530,27 @@ class Road {
     for (let i = 0; i < n; i += step) {
       const [a, az] = solve(i, 1); dR[i] = a; dRz[i] = az;
       const [b, bz] = solve(i, -1); dL[i] = b; dLz[i] = bz;
+    }
+    {   // 마지막 칸이 표본 자리가 아니면 보간이 0 m 를 끌어와 끝에서 지형이 꺼졌다
+      const i = n - 1;
+      const [a, az] = solve(i, 1); dR[i] = a; dRz[i] = az;
+      const [b, bz] = solve(i, -1); dL[i] = b; dLz[i] = bz;
+    }
+    /* ★ 표본끼리 이웃을 섞어 다듬는다. 성토가 옆 골짜기로 끝없이 내려가다
+       바로 다음 표본에서 절토로 뒤집히면 (110 m, −31 m) 와 (32 m, +17 m) 가
+       이웃해 비탈면 사각형이 꼬이고, 지느러미 같은 지형 조각이 섰다. */
+    const W = [1, 2, 3, 2, 1];
+    for (const arr of [dR, dRz, dL, dLz]) {
+      const src = Float32Array.from(arr);
+      for (let i = 0; i < n; i += step) {
+        let acc = 0, wsum = 0;
+        for (let k = -2; k <= 2; k++) {
+          const j = i + k * step;
+          if (j < 0 || j >= n) continue;
+          acc += src[j] * W[k + 2]; wsum += W[k + 2];
+        }
+        arr[i] = acc / wsum;
+      }
     }
     for (let i = 0; i < n; i++) {
       if (i % step === 0) continue;

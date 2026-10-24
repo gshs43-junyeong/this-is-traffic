@@ -246,8 +246,11 @@ const Scene = {
         const outU = corr.rampLat(tc) + corr.rampHalf(tc) + 1.6;
         // 지면 띠는 본선 갓길 바깥에서 시작해 램프 안쪽 경계에서 끝난다.
         // 노즈 부근에서는 램프가 본선에 붙으므로 그 사이가 0 이 되고, 지면은 안 그려진다.
-        if (corr.dir > 0) s.rampR = { in: Math.max(m + inU, s.aSh + 0.8), out: m + outU };
-        else s.rampL = { in: Math.min(-(m + inU), s.bSh - 0.8), out: -(m + outU) };
+        const side = corr.dir > 0 ? 1 : -1;
+        const edge = side * (m + outU);
+        const [foot, footZ] = this.rampFoot(s, edge, g.z + rd.crossZ(g, edge) + corr.rampDz(tc), side);
+        if (corr.dir > 0) s.rampR = { in: Math.max(m + inU, s.aSh + 0.8), out: edge, foot, footZ };
+        else s.rampL = { in: Math.min(-(m + inU), s.bSh - 0.8), out: edge, foot, footZ };
       }
     }
     return s;
@@ -268,6 +271,21 @@ const Scene = {
     const g = s.g;
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
     return Math.max(this.road.terrain(g.x + nx * u, g.y + ny * u), this.road.waterZ);
+  },
+
+  /** 램프 갓길 끝(u, z)에서 본선과 같은 경사(성토 1:1.8 · 절토 1:1.2)로 내려·올라가
+      지형과 만나는 비탈 끝. ★ 14 m 고정 폭으로 그리면 높은 성토 옆에서 48 m 짜리
+      벽이 서고, 그 벽이 늦은 램프 패스에서 가까운 갓길·가드레일을 덮었다. */
+  rampFoot(sec, u, z, side) {
+    const t0 = this.terrAt(sec, u);
+    const fill = z >= t0, k = fill ? -1 / 1.8 : 1 / 1.2;
+    let w = 0, zz = z;
+    for (let i = 0; i < 40; i++) {
+      const nw = w + 3, zs = z + k * nw, zt = this.terrAt(sec, u + side * nw);
+      if (fill ? zs <= zt : zs >= zt) { w = nw; zz = zt; break; }
+      w = nw; zz = zs;
+    }
+    return [u + side * Math.max(w, 2), zz];
   },
 
   quad(a, b, c, d, style) {
@@ -296,6 +314,17 @@ const Scene = {
       if (st.s0 > s0 && st.s0 < s1) stations.push(st.s0);
       if (st.s1 > s0 && st.s1 < s1) stations.push(st.s1);
     }
+    // 이 프레임에 보일 램프만 미리 추린다 (스트립마다 전수 검사하면 프레임을 깎아먹는다)
+    const near = [];
+    for (const corr of [sc.corrA, sc.corrB]) {
+      if (!corr) continue;
+      const sCamL = corr.dir > 0 ? sc.sCam : corr.L - sc.sCam;
+      const lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
+      const rampDrawLen = corr.rampLen + RAMP_VISUAL_EXTENSION;
+      for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1 });
+      for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
+    }
+    this.activeRamps = near;
     // 램프의 실제 시작·끝을 단면 경계와 맞춰 지형 절단과 접속부 틈을 막는다.
     for (const e of near) {
       const len = e.corr.rampLen + RAMP_VISUAL_EXTENSION;
@@ -325,18 +354,6 @@ const Scene = {
       for (const inc of corr.incidents) if (inc.veh && inc.lane < 0) this.bucket(buckets, stations, corr, inc.veh, sc);
     };
     addVeh(sc.corrA); addVeh(sc.corrB);
-
-    // 이 프레임에 보일 램프만 미리 추린다 (스트립마다 전수 검사하면 프레임을 깎아먹는다)
-    const near = [];
-    for (const corr of [sc.corrA, sc.corrB]) {
-      if (!corr) continue;
-      const sCamL = corr.dir > 0 ? sc.sCam : corr.L - sc.sCam;
-      const lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
-      const rampDrawLen = corr.rampLen + RAMP_VISUAL_EXTENSION;
-      for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1 });
-      for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
-    }
-    this.activeRamps = near;
 
     // 단면 미리 계산
     const secs = new Array(stations.length);
@@ -431,8 +448,8 @@ const Scene = {
             this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), gc);
         } else {
           // 경계가 없는 쪽은 본선 비탈끝을 써서 램프 시작·끝의 지형을 삼각형으로 잇는다.
-          const oA = a.rampR ? a.rampR.out : a.dayR, oB = b.rampR ? b.rampR.out : b.dayR;
-          for (const [w0, w1] of [[2, 40], [40, 150]]) {
+          const oA = a.rampR ? a.rampR.foot : a.dayR, oB = b.rampR ? b.rampR.foot : b.dayR;
+          for (const [w0, w1] of [[0, 40], [40, 150]]) {
             this.quad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
               this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), gc);
           }
@@ -453,12 +470,14 @@ const Scene = {
             this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
             this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), gc);
         } else {
-          const oA = a.rampL ? a.rampL.out : a.dayL, oB = b.rampL ? b.rampL.out : b.dayL;
-          for (const [w0, w1] of [[2, 40], [40, 150]]) {
+          const oA = a.rampL ? a.rampL.foot : a.dayL, oB = b.rampL ? b.rampL.foot : b.dayL;
+          for (const [w0, w1] of [[0, 40], [40, 150]]) {
             this.quad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
               this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), gc);
           }
         }
+        // 램프 바깥 비탈면은 지면이므로 본선 지면과 같은 원근 순서로 그린다
+        if (a.nearIC || b.nearIC) this.rampSurf(ctx, a, b, dist, sc, true);
       }
     }
 
@@ -487,22 +506,22 @@ const Scene = {
   /* ---------- 램프 노면 ----------
      본선에서 갈라져 나가는 진입·진출로를 실제로 그린다.
      이게 없으면 차가 허공에서 나타나 합류하는 것처럼 보인다. */
-  rampSurf(ctx, a, b, dist, sc) {
+  rampSurf(ctx, a, b, dist, sc, slope) {
     const list = this.activeRamps;
     if (!list || !list.length) return;
     for (let i = 0; i < list.length; i++) {
       const e = list[i], corr = e.corr, L = corr.L;
       const sa = corr.dir > 0 ? a.sRoad : L - a.sRoad;
       const sb = corr.dir > 0 ? b.sRoad : L - b.sRoad;
-      if (e.on) this.rampSeg(ctx, a, b, dist, corr, e.s - sa, e.s - sb, sc);
-      else this.rampSeg(ctx, a, b, dist, corr, sa - e.s, sb - e.s, sc);
+      if (e.on) this.rampSeg(ctx, a, b, dist, corr, e.s - sa, e.s - sb, sc, slope);
+      else this.rampSeg(ctx, a, b, dist, corr, sa - e.s, sb - e.s, sc, slope);
     }
   },
   /** 노즈로부터의 거리 ta, tb 사이의 램프 한 토막.
       노즈 쪽에서는 램프가 차로 하나 폭으로 좁아져 가감속차로와 그대로 이어진다.
       예전처럼 안쪽 경계를 갓길 바깥선에 고정하면, 노즈 앞 60 m 가 실 한 가닥으로
       줄었다 사라져 도로가 끊긴 것처럼 보였다. */
-  rampSeg(ctx, a, b, dist, corr, ta, tb, sc) {
+  rampSeg(ctx, a, b, dist, corr, ta, tb, sc, slope) {
     const LEN = corr.rampLen + RAMP_VISUAL_EXTENSION;
     if ((ta < 0 && tb < 0) || (ta > LEN && tb > LEN)) return;
     const t0 = clamp(ta, 0, LEN), t1 = clamp(tb, 0, LEN);
@@ -521,6 +540,15 @@ const Scene = {
       const g = sec.g, nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
       return [g.x + nx * uw, g.y + ny * uw, g.z + this.road.crossZ(g, uw) + corr.rampDz(t)];
     };
+    if (slope) {
+      // 램프 바깥 비탈면 — 본선과 같은 경사로 주변 지형까지 내리거나 올린다
+      const side = corr.dir > 0 ? 1 : -1;
+      const ea = P(a, outA + sh, t0), eb = P(b, outB + sh, t1);
+      const fa = this.rampFoot(a, side * (a.g.med + outA + sh), ea[2], side);
+      const fb = this.rampFoot(b, side * (b.g.med + outB + sh), eb[2], side);
+      this.quad(ea, eb, this.ptZ(b, fb[0], fb[1]), this.ptZ(a, fa[0], fa[1]), this.haze(pal.grass, dist));
+      return;
+    }
     // 포장 + 바깥 갓길
     this.quad(P(a, inA, t0), P(b, inB, t1), P(b, outB, t1), P(a, outA, t0), road);
     this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
@@ -531,13 +559,6 @@ const Scene = {
         this.quad(P(a, inA + 0.13, t0), P(b, inB + 0.13, t1), P(b, inB + 0.31, t1), P(a, inA + 0.31, t0), white);
       }
     }
-    // 램프 바깥 비탈면 — 주변 지형 높이까지 자연스럽게 내린다
-    const gc = this.haze(pal.grass, dist);
-    const oa = corr.dir > 0 ? (a.g.med + outA + sh) : -(a.g.med + outA + sh);
-    const ob = corr.dir > 0 ? (b.g.med + outB + sh) : -(b.g.med + outB + sh);
-    const fa = oa + (corr.dir > 0 ? 14 : -14), fb = ob + (corr.dir > 0 ? 14 : -14);
-    this.quad(P(a, outA + sh, t0), P(b, outB + sh, t1),
-      this.ptZ(b, fb, this.terrAt(b, fb)), this.ptZ(a, fa, this.terrAt(a, fa)), gc);
   },
 
   /* ---------- 노면표시 ----------
@@ -786,23 +807,35 @@ const Scene = {
       }
       return z;
     };
+    /* ★ 굴 위는 촘촘히 나눈다. 22 m 폭 사각형의 꼭짓점에서만 굴 높이를 지키면
+       꼭짓점 사이 면이 산이 얇은 갱구 쪽에서 굴 천장을 뚫고 내려왔다. */
     const uL = -(hw + ext), uR = hw + ext;
+    const us = [];
+    for (let i = 0; i <= N; i++) us.push(lerp(uL, uR, i / N));
+    for (const g of boresA.concat(boresB)) {
+      for (let k = 0; k <= 12; k++) us.push(g.c - g.A - 1 + (2 * g.A + 2) * k / 12);
+    }
+    us.sort((p, q) => p - q);
     // 산등성이 표면
-    for (let i = 0; i < N; i++) {
-      const u0 = lerp(uL, uR, i / N), u1 = lerp(uL, uR, (i + 1) / N);
+    for (let i = 0; i < us.length - 1; i++) {
+      const u0 = us[i], u1 = us[i + 1];
+      if (u1 - u0 < 0.05) continue;
       const za0 = coveredTerrain(a, boresA, u0), za1 = coveredTerrain(a, boresA, u1);
       const zb0 = coveredTerrain(b, boresB, u0), zb1 = coveredTerrain(b, boresB, u1);
       const rise = ((za0 + za1) / 2) - a.g.z;
       const col = this.haze(rise > 24 ? mixHex(pal.grass, pal.rock, clamp((rise - 24) / 40, 0, 0.7)) : pal.grass, dist);
       this.quad(this.ptZ(a, u0, za0), this.ptZ(b, u0, zb0), this.ptZ(b, u1, zb1), this.ptZ(a, u1, za1), col);
     }
-    // 옆구리 — 노면 높이에서 산등성이까지 세운 면. 굴 바깥을 막아 준다
+    /* 옆구리 — 노면 높이에서 산등성이까지 세운 면. 굴 바깥을 막아 준다.
+       ★ 타원 굴은 노면 위 tunnelCz 에서 가장 넓어 hw 보다 바깥으로 나간다.
+       옆구리를 hw 에 세우면 그 면이 굴 안에 서서 벽에 톱니 조각이 보였다. */
     const flank = this.haze(mixHex(pal.rock, pal.grass, 0.35), dist);
+    const ext2 = (geos, side) => geos.reduce((m, g) => side > 0 ? Math.max(m, g.c + g.A) : Math.min(m, g.c - g.A), 0) + side * 0.6;
     for (const side of [-1, 1]) {
-      const u = hw * side;
-      const za = Math.max(this.terrAt(a, u), a.g.z + 2), zb = Math.max(this.terrAt(b, u), b.g.z + 2);
-      this.quad(this.ptZ(a, u, a.g.z - 14), this.ptZ(b, u, b.g.z - 14),
-        this.ptZ(b, u, zb), this.ptZ(a, u, za), flank);
+      const ua = side * Math.max(hw, Math.abs(ext2(boresA, side))), ub = side * Math.max(hw, Math.abs(ext2(boresB, side)));
+      const za = Math.max(this.terrAt(a, ua), a.g.z + RoadStd.tunnelH + 1), zb = Math.max(this.terrAt(b, ub), b.g.z + RoadStd.tunnelH + 1);
+      this.quad(this.ptZ(a, ua, a.g.z - 14), this.ptZ(b, ub, b.g.z - 14),
+        this.ptZ(b, ub, zb), this.ptZ(a, ua, za), flank);
     }
   },
 
@@ -1194,7 +1227,7 @@ const Scene = {
 
   /* ---------- 화면 위 효과 ---------- */
   overlay(ctx, W, H, sc) {
-    if (sc.weather === 'rain') {
+    if (sc.weather === 'rain' && !sc.inTunnel) {   // 굴 안에는 비가 들이치지 않는다
       const rng = new RNG(Math.floor(sc.time * 30));
       ctx.strokeStyle = '#cfe3f288'; ctx.lineWidth = 1.1;
       ctx.beginPath();
