@@ -15,7 +15,9 @@ const CFG_DEFAULT = {
   incidentRate: 0.5,   // 돌발상황 건/시
   reactionTime: 0.5,   // 지각 반응시간 s
   noise: 1.0,          // 가속도 잡음 배율
-  phantomSeed: false,   // 유령정체 프리셋에서 구조물 접근부 초기 교란을 강제
+  phantomSeed: false,
+  jamMemory: 0.25,     // 정체 기억 세기 — 정체를 겪은 뒤 차두시간 증가율 (용량 저하)
+  initJam: 0,          // 시작할 때 전방에 깔아 두는 유령정체 길이 m (0 = 없음)   // 유령정체 프리셋에서 구조물 접근부 초기 교란을 강제
   laneRule: true,      // 지정차로제
   weather: 'dry',      // dry | rain
   peak: false,         // 첨두 수요 프로파일
@@ -80,6 +82,14 @@ const App = {
     this.corrA.seedFeaturePhantomJams(c.phantomSeed);
     if (this.corrB) this.corrB.seedFeaturePhantomJams(c.phantomSeed);
     UI.toast(this.roadSummary(), 5);
+    if (c.initJam > 0) this.makeJam(c.initJam, 2600);
+  },
+  /** 전방 ahead m 지점에 머리를 둔 길이 len 의 유령정체를 만든다 (반대편 차도에도 같은 거리에) */
+  makeJam(len, ahead) {
+    const p = this.player;
+    const n = this.corrA.seedWideJam(p.s + ahead, len);
+    if (this.corrB) this.corrB.seedWideJam(this.corrB.L - p.s + ahead * 0.6, len);
+    UI.toast(`전방 ${fmt1(ahead / 1000)} km 에 유령정체 ${fmt1(len / 1000)} km (${n}대) — 상류로 밀려 내려온다`, 4);
   },
   roadSummary() {
     const r = this.road;
@@ -152,19 +162,22 @@ const App = {
     const set = (o) => { Object.assign(c, o); for (const inp of $$('[data-cfg]')) { const k = inp.dataset.cfg; if (inp.type === 'checkbox') inp.checked = !!c[k]; else inp.value = c[k]; const out = inp.parentElement.querySelector('.val'); if (out) out.textContent = UI.fmtCfg(k, c[k]); } };
     switch (name) {
       case 'free':
-        set({ demand: 900, rampPct: 8, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        set({ demand: 900, rampPct: 8, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false, jamMemory: 0.25, initJam: 0 });
         this.rebuild(); UI.toast('자유류 — 수요 900대/시/차로', 3); return;
       case 'near':
-        set({ demand: 1700, rampPct: 12, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        set({ demand: 1700, rampPct: 12, incidentRate: 0, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false, jamMemory: 0.25, initJam: 0 });
         this.rebuild(); UI.toast('임계 상태 — 수요와 램프 합류로 작은 파동을 관찰', 4); return;
       case 'phantom':
-        set({ demand: 1950, rampPct: 0, incidentRate: 0, peak: false, noise: 1.6, reactionTime: 0.8, phantomSeed: true });
+        set({ demand: 1950, rampPct: 0, incidentRate: 0, peak: false, noise: 1.6, reactionTime: 0.8, phantomSeed: true, jamMemory: 0.3, initJam: 800 });
         this.rebuild(); UI.toast('유령정체 — 한 대의 가벼운 브레이크가 정지파로 자라 상류로 번진다', 4); return;
+      case 'longjam':
+        set({ demand: 2100, rampPct: 10, incidentRate: 0, peak: false, noise: 1.3, reactionTime: 0.7, phantomSeed: true, jamMemory: 0.55, initJam: 1500 });
+        this.rebuild(); UI.toast('긴 유령정체 — 빠져나가는 양이 들어오는 양보다 적어 정체가 길어진다', 4.5); return;
       case 'jam':
-        set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false, jamMemory: 0.25, initJam: 0 });
         this.rebuild(); UI.toast('혼잡 — 과포화 유입과 합류 병목', 4); return;
       case 'peak':
-        set({ demand: 1400, rampPct: 16, incidentRate: 0.3, peak: true, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
+        set({ demand: 1400, rampPct: 16, incidentRate: 0.3, peak: true, noise: 1.0, reactionTime: 0.5, phantomSeed: false, jamMemory: 0.25, initJam: 0 });
         this.rebuild(); UI.toast('첨두 — 수요가 용량을 넘었다가 되돌아온다', 4); return;
       case 'rain': set({ weather: 'rain', timeOfDay: 'dusk', demand: 1600, phantomSeed: false }); UI.toast('우천 — 희망속도·차두시간이 나빠진다', 4); break;
       case 'night': set({ timeOfDay: 'night', demand: 800, phantomSeed: false }); UI.toast('야간 — 통행량이 적다', 3); break;
@@ -193,6 +206,7 @@ const App = {
         }
         break;
       }
+      case 'phantomjam': this.makeJam(Math.max(this.cfg.initJam, 1000), 1800); break;
       case 'map': this.showMap = !this.showMap; this.mapCv.style.display = this.showMap ? '' : 'none'; break;
       case 'speed': this.speedMul = this.speedMul >= 4 ? 1 : this.speedMul * 2;
         UI.toast('모의 배속 ' + this.speedMul + '배', 1.6); break;
@@ -227,6 +241,7 @@ const App = {
       else if (k === 'p') this.action('auto');
       else if (k === 'i') this.action('incident');
       else if (k === 'm') this.action('map');
+      else if (k === 'j') this.action('phantomjam');
       else if (k === 'escape' || k === 'tab') { e.preventDefault(); UI.togglePanel(!this.paused); }
       else if (k === 'r') this.action('reset');
       else if (k === 'x') this.action('speed');

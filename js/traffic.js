@@ -428,7 +428,7 @@ class Corridor {
         const v = arr[j];
         if (v.obstacle) continue;
         if (v.isPlayer && !player.auto) continue;
-        v.a = this.accelFor(v, arr[j + 1], dSteps);
+        v.a = this.accelFor(v, arr[j + 1], dSteps, arr[j + 2]);
       }
     }
     // 4) 차로 변경 판단
@@ -465,7 +465,7 @@ class Corridor {
   }
 
   /** IDM + 동력한계 + 종단경사 + 강제 감속요인 */
-  accelFor(v, lead, dSteps) {
+  accelFor(v, lead, dSteps, lead2) {
     const p = v.p;
     const s = v.s;
     let v0 = this.limitAt(s, v);
@@ -478,9 +478,10 @@ class Corridor {
     const s0 = p.s0 * relaxS;
     const aMax = p.a * v.aggr;
 
-    let acc = 1e9;
+    let acc = 1e9, gapNow = Infinity;
     // 선행차 (지각 지연 반영)
     if (lead) {
+      gapNow = lead.s - v.s - lead.len;
       let gap, dv;
       if (dSteps > 0 && !lead.obstacle) {
         // 반응시간 만큼 지연된 선행차 상태를 본다 (Human Driver Model).
@@ -495,6 +496,17 @@ class Corridor {
     } else {
       let x = v.v / v0; if (x > 3) x = 3;
       acc = Math.min(acc, aMax * (1 - x * x * x * x));
+    }
+    /* 다중 선행차 예측 (HDM — Treiber, Kesting & Helbing 2006): 두 대 앞 차의 브레이크등도
+       본다. 평형 상태에서는 두 대 앞과의 간격이 넉넉해 아무 영향이 없고, 두 대 앞이
+       급제동할 때만 미리 늦춘다. 이게 없으면 정지파 머리에서 0.7 s 지연이 차마다 쌓여
+       뒤로 갈수록 제동이 세지다 추돌했다. */
+    if (lead && lead2 && !lead.obstacle) {
+      const g2 = lead2.s - lead2.len - v.s - lead.len - lead.p.s0;
+      if (g2 > 0.5) {
+        const a2 = idmAccel(v.v, v0, g2, v.v - lead2.v, aMax, T, s0, v.sqrtAB);
+        if (a2 < acc) acc = a2;
+      }
     }
     // 협조 양보 — 합류차를 부드럽게 선행차로 취급한다 (급제동은 하지 않는다)
     if (v.yieldStamp === this.stepId && v.yieldTo) {
@@ -545,7 +557,8 @@ class Corridor {
     const tauN = 6;
     v.eta += (-v.eta / tauN) * DT + p.aNoise * this.cfg.noise * NOISE_K * this.rng.normalFast();
     v.eta = clamp(v.eta, -0.8, 0.8);
-    acc += v.eta;
+    // 바짝 붙은 상태에서는 잡음이 가속 쪽으로 밀지 못하게 한다 (추종 중 추돌 방지)
+    acc += (v.eta > 0 && gapNow < 2 * s0) ? 0 : v.eta;
     return clamp(acc, -9.5, 4.0);
   }
 
@@ -634,7 +647,8 @@ class Corridor {
     v.relax = Math.max(0, v.relax - dt / 4.0);
     {
       const x = 1 - v.v / MEM.vRef;
-      const target = 1 + MEM.gain * (x > 0 ? (x < 1 ? x : 1) : 0);
+      const gain = this.cfg.jamMemory != null ? this.cfg.jamMemory : MEM.gain;
+      const target = 1 + gain * (x > 0 ? (x < 1 ? x : 1) : 0);
       v.mem += (target - v.mem) * dt / (target > v.mem ? MEM.tauUp : MEM.tauDown);
     }
     v.lcCool = Math.max(0, v.lcCool - dt);
@@ -689,8 +703,10 @@ class Corridor {
       const forcedMerge = mergeLane && urg >= 0.65 && (!foll || followerYielding);
       // 보통 차로변경은 간격을 지킨다. 합류차에 뒤차가 양보한 경우에는
       // 속도에 맞는 최소 여유만 확인하고, 정체된 가속차로 끝에서 막히지 않게 한다.
-      const minFront = forcedMerge ? Math.max(2, v.v * 0.35) : 0.6;
-      const minBack = forcedMerge ? Math.max(2, foll ? foll.v * 0.25 : 0) : 0.6;
+      // 일반 차로변경도 범퍼 사이 1.5 m + 속도 비례 여유는 둔다 (0.6 m 이면 정체 꼬리에서
+      // 기어가던 뒤차가 반응 지연 동안 끼어든 차에 닿았다)
+      const minFront = forcedMerge ? Math.max(2, v.v * 0.35) : Math.max(1.5, v.v * 0.3);
+      const minBack = forcedMerge ? Math.max(2, foll ? foll.v * 0.25 : 0) : Math.max(1.5, foll ? foll.v * 0.45 : 0);
       if (lead && lead.s - v.s - lead.len < minFront) continue;
       if (foll && v.s - foll.s - v.len < minBack) continue;
 
@@ -706,9 +722,12 @@ class Corridor {
       // 우측주행 원칙: 오른쪽으로 가면 유인, 왼쪽으로 가면 저항
       // 지정차로제가 켜져 있으면 오른쪽 차로를 확실히 우선한다.
       // 왼쪽 이동은 현재 차로의 느린 선행차를 추월할 만큼 이득이 있을 때 선택된다.
-      let bias = this.cfg.laneRule
-        ? (dirLC > 0 ? -MOBIL.keepRight : MOBIL.keepRight)
-        : 0;
+      /* 도로교통법 시행규칙 별표 9: 고속도로 1차로는 추월차로지만 '통행량 증가 등으로
+         부득이하게 80 km/h 미만으로 통행할 수밖에 없는 경우'는 예외다. 그래서 80 km/h
+         이상에서는 우측 우선을 그대로 지키고, 그 아래로 느려지면 풀어 60 km/h 이하에서는
+         혼잡한 모든 차로를 고르게 쓴다. 이게 없으면 정체가 와도 1차로가 비어 있었다. */
+      const kr = MOBIL.keepRight * clamp((v.v - 60 * KMH) / (20 * KMH), 0, 1);
+      let bias = this.cfg.laneRule ? (dirLC > 0 ? -kr : kr) : 0;
       if (v.p.heavy && this.cfg.laneRule) bias += dirLC > 0 ? -0.25 : 0.45;
       // 강제 차로변경 압력
       if (mand.dir === dirLC) bias -= 7.0 * urg;
@@ -1035,7 +1054,7 @@ class Corridor {
         if (leadGap < v.p.s0 + v.v * v.Tbase * 0.55 ||
             (follower && followerGap < follower.p.s0 + follower.v * follower.Tbase * 0.55)) {
           // 기존 플레이어/차량과 겹치지 않게 후보 위치만 건너뛴다.
-          s += Math.max(v.len + v.p.s0 + v.v * v.Tbase * 0.85, v.v * this.rng.exp(meanHw));
+          s += v.len + v.p.s0 + v.v * v.Tbase * 0.85;
           v.alive = false;
           if (this.pool.length < 2500) this.pool.push(v);
           continue;
@@ -1047,9 +1066,13 @@ class Corridor {
         this.assignExit(v, s);
         arr.splice(k, 0, v);
         placed++;
-        // 다음 차까지의 거리 — 포아송 도착을 거리로 환산하고 최소 안전 차두를 지킨다
+        /* 다음 차까지 — 최소 안전 차두 + 지수분포(이동한 포아송 도착).
+           ★ 평균 간격은 희망속도가 아니라 실제로 낼 속도(희망속도의 0.8)에 맞춘다.
+           예전처럼 희망속도 기준으로 잡고 최소 차두를 max 로 덧씌우면 평균 간격이
+           부풀어, 시작 직후 노선 교통량이 수요의 70% 남짓에 그쳤다. */
         const minGap = v.len + v.p.s0 + v.v * v.Tbase * 0.85;
-        s += Math.max(minGap, v.v * this.rng.exp(meanHw));
+        const meanGap = (0.94 - 0.14 * clamp(perLane / 2000, 0, 1)) * v.v * meanHw;   // 한산하면 희망속도에 가깝다
+        s += minGap + this.rng.exp(Math.max(meanGap - minGap, 2));
       }
     }
     for (let li = 0; li < this.lanes.length; li++) {
@@ -1274,6 +1297,55 @@ class Corridor {
       inc.t -= dt;
       if (inc.t <= 0) this.removeIncident(i);
     }
+  }
+
+  /* 넓은 이동 정체(wide moving jam)를 깔아 둔다 — Kerner (2004)의 정체 상태 그대로:
+     차로당 약 140 대/km 로 거의 서 있고, 겪은 운전자라 정체 기억이 이미 차 있다.
+     머리는 차가 빠져나가며 상류로 물러나고, 꼬리는 들어오는 차가 쌓으며 자라거나 준다.
+     꼬리 뒤 250 m 는 감속 구간으로 만들어 상류 차가 정지열에 부딪히지 않게 한다. */
+  seedWideJam(sFront, len) {
+    const s1 = clamp(sFront, 400, this.L - 300), s0 = Math.max(150, s1 - len);
+    if (s1 - s0 < 50) return 0;
+    const gain = this.cfg.jamMemory != null ? this.cfg.jamMemory : MEM.gain;
+    const TAIL = 250;
+    let n = 0;
+    for (let li = 0; li < this.nLane; li++) {
+      const arr = this.lanes[li];
+      let keep = null;
+      for (let j = arr.length - 1; j >= 0; j--) {
+        const v = arr[j];
+        if (v.s < s0 - 5 || v.s > s1 + 5 || v.obstacle) continue;
+        if (v.isPlayer) { keep = v; continue; }
+        arr.splice(j, 1); v.alive = false;
+        if (this.pool.length < 2500) this.pool.push(v);
+      }
+      let s = s1;
+      while (s > s0) {
+        let cls = this.pickClass();
+        if (cls !== 'car' && this.cfg.laneRule && li < this.heavyMinLane()) cls = 'car';
+        const v = this.newVehicle(cls);
+        if (keep && Math.abs(keep.s - s) < v.len + 8) { s = keep.s - keep.len - 3; continue; }
+        v.s = s; v.v = this.rng.range(0, 1.6); v.a = 0;
+        v.lane = v.laneT = li; v.u = v.uT = this.laneU(li);
+        v.mem = 1 + gain; v.t0 = this.time; v.s0enter = s;
+        for (let h = 0; h < HIST; h++) { v.hs[h] = v.s - v.v * (HIST - h) * DT; v.hv[h] = v.v; }
+        this.assignExit(v, s);
+        arr.push(v); n++;
+        s -= v.len + v.p.s0 * this.rng.range(1.0, 1.35) + 0.4;
+      }
+      // 꼬리 앞 감속 구간 — 상류 차를 미리 늦춰 둔다
+      for (const v of arr) {
+        const d = s0 - v.s;
+        if (d > 0 && d < TAIL && !v.isPlayer && !v.obstacle) {
+          const vMax = 2 + (d / TAIL) * 24;
+          if (v.v > vMax) { v.v = vMax; for (let h = 0; h < HIST; h++) { v.hs[h] = v.s - v.v * (HIST - h) * DT; v.hv[h] = v.v; } }
+        }
+      }
+      insertionSortByS(arr);
+      for (let k = 0; k < arr.length; k++) arr[k].idx = k;
+    }
+    this.entered += n;
+    return n;
   }
 
   addIncident(opt) {

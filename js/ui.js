@@ -67,6 +67,8 @@ const UI = {
       case 'incidentRate': return fmt1(v) + ' 건/시';
       case 'reactionTime': return fmt2(v) + ' s';
       case 'noise': return fmt2(v) + '배';
+      case 'jamMemory': return '+' + fmt0(v * 100) + '% 차두';
+      case 'initJam': return v > 0 ? fmt1(v / 1000) + ' km' : '없음';
       case 'length': return fmt1(v / 1000) + ' km';
       case 'seed': return '#' + v;
       case 'relief': case 'density': case 'ruggedness': return fmt0(v);
