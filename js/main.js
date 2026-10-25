@@ -159,7 +159,7 @@ const App = {
         this.rebuild(); UI.toast('임계 상태 — 수요와 램프 합류로 작은 파동을 관찰', 4); return;
       case 'phantom':
         set({ demand: 1950, rampPct: 0, incidentRate: 0, peak: false, noise: 1.6, reactionTime: 0.8, phantomSeed: true });
-        this.rebuild(); UI.toast('유령정체 — 터널·IC·교량·경사 상류에서 시작한 전 차로 파동', 4); return;
+        this.rebuild(); UI.toast('유령정체 — 한 대의 가벼운 브레이크가 정지파로 자라 상류로 번진다', 4); return;
       case 'jam':
         set({ demand: 2100, rampPct: 20, incidentRate: 0.4, peak: false, noise: 1.0, reactionTime: 0.5, phantomSeed: false });
         this.rebuild(); UI.toast('혼잡 — 과포화 유입과 합류 병목', 4); return;

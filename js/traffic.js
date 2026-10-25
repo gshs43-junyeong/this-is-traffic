@@ -77,6 +77,14 @@ const HIST = 48;                 // 지각지연용 이력 버퍼 길이 (48 * 0
 const RAMP_LEN = 450;            // 진출·진입 곡선 길이 (m)
 const RAMP_OFF = 33;             // 램프 종점의 본선 이격 (m)
 const ACCEL_LEN = 450;           // 진입 가속차로 길이 (m)
+/* 정체 기억 (Treiber & Helbing 2003, Phys. Rev. E 68, 046119):
+   정체를 겪은 운전자는 한동안 차두시간을 늘린다. 정체 출구의 유출량이 유입보다
+   작아지는 용량 저하(capacity drop)가 여기서 나오고, 정체파가 사라지지 않고
+   상류로 이동한다. 빨리 늘고(8 s) 천천히 돌아온다(80 s). */
+const MEM = { vRef: 70 * KMH, gain: 0.25, tauUp: 8, tauDown: 80 };   // 용량 저하 실측 10~20 % 에 맞춘 세기
+/* 차로 간 마찰 (Daganzo 2002; Jang & Cassidy 2012): 옆 차로가 막혀 있으면
+   빈 차로도 그 속도보다 크게 빠르게 달리지 않는다. */
+const FRICTION = { dv: 40 * KMH, look: 70 };
 const ON_GORE = RAMP_LEN * 2;    // 램프 두 곡선이 바깥 접속점에서 만나도록 배치
 
 let _vid = 1;
@@ -103,6 +111,7 @@ class Vehicle {
     this.exitS = Infinity; this.t0 = 0; this.s0enter = 0;
     this.obstacle = false; this.isPlayer = false; this.brake = 0; this.alive = true;
     this.phantomTargetV = 0; this.phantomUntil = 0;
+    this.mem = 1; this.vAdj = Infinity;
     this.dz = 0; this.rampT = 0;
     this.hn = 0; this.hs.fill(0); this.hv.fill(0);
     this.missed = false; this.onRamp = null; this.rs = 0;
@@ -203,6 +212,20 @@ class Corridor {
         if (runS >= 0 && s - runS >= 700) raw.push({ s0: runS + 150, s1: Math.min(L - 60, s + 250), type: 'climb', ic: -1 });
         runS = -1;
       }
+    }
+    /* 오르막차로는 터널 안으로 이어 가지 않는다 — 갱구 150 m 앞에서 끝내고,
+       터널 안에서 시작하는 것은 출구 뒤로 미룬다. */
+    const tun = this.road.structs.filter(st => st.type === 'tunnel')
+      .map(st => dir > 0 ? [st.s0, st.s1] : [L - st.s1, L - st.s0]);
+    for (const r of raw) {
+      if (r.type !== 'climb') continue;
+      for (const [t0, t1] of tun) {
+        if (r.s0 >= t0 - 150 && r.s0 < t1) r.s0 = t1 + 60;
+        if (r.s1 > t0 - 150 && r.s0 < t0) r.s1 = t0 - 150;
+      }
+      /* 잘려서 짧아진 오르막차로는 두지 않는다. 경사 한가운데서 끝나는 500 m 남짓한
+         차로는 기어오르는 화물차를 본선에 다시 밀어 넣는 차로 감소 병목일 뿐이었다. */
+      if (r.s1 - r.s0 < 600) r.s1 = r.s0;
     }
     // 겹치면 하나의 연속 부가차로로 합친다
     raw.sort((a, b) => a.s0 - b.s0);
@@ -359,7 +382,10 @@ class Corridor {
       const a = this.auxAt(s); if (!a) return false;
       // 가속차로는 램프 진입차 전용, 감속차로는 유출차 전용, 오르막차로만 저속차에 열려 있다.
       // 이 구분이 없으면 본선 차량이 부가차로를 주행차로로 써 버려 종점마다 병목이 생긴다.
-      if (a.type === 'climb') return veh.p.heavy || veh.v < 22;
+      /* 오르막차로는 저속 중차량용이다. 예전처럼 '79 km/h 미만이면 누구나'로 두면
+         정체가 오는 순간 우측 우선에 끌려 승용차까지 모두 내려왔다가 종점에서 다시
+         지퍼 합류해, 스스로 3 km 넘는 고정 정체를 만들었다. */
+      if (a.type === 'climb') return veh.p.heavy;
       if (a.type === 'accel') return false;
       return isFinite(veh.exitS) && veh.exitS <= a.s1 + 60;
     }
@@ -415,6 +441,7 @@ class Corridor {
         v.decide -= dt;
         if (v.decide > 0) continue;
         v.decide = 0.30 + this.rng.next() * 0.25;
+        this.updateFriction(v);
         this.considerExit(v);
         this.tryLaneChange(v, dSteps);
       }
@@ -441,10 +468,13 @@ class Corridor {
   accelFor(v, lead, dSteps) {
     const p = v.p;
     const s = v.s;
-    const v0 = this.limitAt(s, v);
+    let v0 = this.limitAt(s, v);
+    if (v.vAdj + FRICTION.dv < v0) v0 = Math.max(v.vAdj + FRICTION.dv, 8);
     const hf = this.headwayFactor(s);
-    const relaxT = 1 - 0.55 * v.relax, relaxS = 1 - 0.40 * v.relax;
-    const T = v.Tbase * hf * relaxT;
+    /* 끼어든 직후의 차두 완화. 너무 너그러우면 밀집한 우측 차로로 복귀하는 차가
+       뒤차를 전혀 흔들지 않아, 실측 정체의 가장 흔한 시작점이 사라진다. */
+    const relaxT = 1 - 0.40 * v.relax, relaxS = 1 - 0.35 * v.relax;
+    const T = v.Tbase * hf * relaxT * v.mem;
     const s0 = p.s0 * relaxS;
     const aMax = p.a * v.aggr;
 
@@ -474,6 +504,24 @@ class Corridor {
       const soft = aY < -2.6 ? -2.6 : aY;
       if (soft < acc) acc = soft;
     }
+    /* 합류 동기화: 가속·오르막 차로에서 합류를 기다리는 차는 본선 차로의 앞차를
+       느슨한 차두로 함께 따라가 그 뒤 틈에 속도를 맞춘다 (본선보다 빨리 끝까지
+       달려가 멈추지 않는다). 나란히 겹친 차는 건너뛰고 꽁무니가 앞에 있는 차를 본다. */
+    if (v.lane === this.nLane && !v.isPlayer) {
+      const ax = this.auxAt(s);
+      if (ax && ax.type !== 'decel' && !this.isExiting(v, ax)) {
+        const tarr = this.lanes[this.nLane - 1];
+        let k = this.seek(tarr, s);
+        while (k < tarr.length && tarr[k].s - tarr[k].len < s + 1) k++;
+        const tl = tarr[k];
+        if (tl && !tl.obstacle) {
+          const urg = clamp(1 - (ax.s1 - s) / 620, 0, 1);
+          const aS = idmAccel(v.v, v0, tl.s - tl.len - s, v.v - tl.v, aMax, T * (0.6 - 0.3 * urg), s0 * 0.6, v.sqrtAB);
+          const soft = aS < -3 ? -3 : aS;
+          if (soft < acc) acc = soft;
+        }
+      }
+    }
     // 부가차로 종점 / 램프 종점 / 사고 차단 — 가상의 정지 장애물
     const stopAt = this.hardStopAhead(v);
     if (stopAt !== null) {
@@ -501,6 +549,20 @@ class Corridor {
     return clamp(acc, -9.5, 4.0);
   }
 
+  /** 옆 주행차로 바로 앞 차의 속도 — 차로 간 마찰의 기준 (부가차로는 보지 않는다) */
+  updateFriction(v) {
+    let m = Infinity;
+    if (v.lane < this.nLane) {
+      for (const tl of [v.lane - 1, v.lane + 1]) {
+        if (tl < 0 || tl >= this.nLane) continue;
+        const arr = this.lanes[tl];
+        const lead = arr[this.seek(arr, v.s)];
+        if (lead && !lead.obstacle && lead.s - v.s < FRICTION.look && lead.v < m) m = lead.v;
+      }
+    }
+    v.vAdj = m;
+  }
+
   /* ---------- 협조 양보 ----------
      MOBIL 만으로는 강제 합류가 성립하지 않는다. 본선 차량이 아무도 자리를
      내주지 않으면 가속차로 종점에서 합류차가 그대로 서 버리기 때문이다.
@@ -514,7 +576,7 @@ class Corridor {
       const a = this.auxAt(v.s);
       if (this.isExiting(v, a)) continue;      // 빠져나가는 차는 자리를 청하지 않는다
       const end = a ? a.s1 : v.s;
-      const merge = a && a.type === 'accel';
+      const merge = !!a && a.type !== 'decel';   // 가속·오르막 차로 끝은 모두 합류점
       const urg = clamp(1 - (end - v.s) / (merge ? 620 : 260), 0, 1);
       if (urg < (merge ? 0.12 : 0.20)) continue;
       // 램프 차량에게는 본선 뒤차가 실제로 간격을 열어 주도록 합류 우선권을 준다.
@@ -536,7 +598,11 @@ class Corridor {
   requestYield(v, tl, urg, priority) {
     if (tl < 0 || tl >= this.lanes.length) return;
     const arr = this.lanes[tl];
-    const k = this.seek(arr, v.s);
+    /* ★ 양보는 합류차 꽁무니보다 완전히 뒤에 있는 차가 한다. 이미 나란히 선 차에게
+       '뒤로 물러서라'고 하면 그 자리에서 서 버리고, 합류차는 옆이 막혀 못 들어가
+       둘 다 영원히 멈췄다(오르막차로 끝 교착 — 3차로가 통째로 막혔다). */
+    let k = this.seek(arr, v.s);
+    while (k > 0 && arr[k - 1].s > v.s - v.len - 1.5) k--;
     const foll = arr[k - 1];
     if (!foll || foll.obstacle || (!foll.courteous && !priority)) return;
     if (v.s - foll.s > 75) return;
@@ -566,6 +632,11 @@ class Corridor {
     v.brake = v.a < -0.6 ? 1 : 0;
     if (v.v < 1.5 && v.lane === this.nLane) v.stuck += dt; else v.stuck = 0;
     v.relax = Math.max(0, v.relax - dt / 4.0);
+    {
+      const x = 1 - v.v / MEM.vRef;
+      const target = 1 + MEM.gain * (x > 0 ? (x < 1 ? x : 1) : 0);
+      v.mem += (target - v.mem) * dt / (target > v.mem ? MEM.tauUp : MEM.tauDown);
+    }
     v.lcCool = Math.max(0, v.lcCool - dt);
     // 횡방향 — 차로 중심으로 부드럽게 이동
     const uPrev = v.u;
@@ -613,7 +684,7 @@ class Corridor {
       const dirLC = tl > cur ? 1 : -1;
       const urg = (mand.dir === dirLC) ? mand.urg : 0;
       const mergeAux = cur === this.nLane ? this.auxAt(v.s) : null;
-      const mergeLane = !!mergeAux && mergeAux.type === 'accel' && mand.dir === dirLC;
+      const mergeLane = !!mergeAux && mergeAux.type !== 'decel' && mand.dir === dirLC;
       const followerYielding = !!foll && foll.yieldStamp === this.stepId && foll.yieldTo === v;
       const forcedMerge = mergeLane && urg >= 0.65 && (!foll || followerYielding);
       // 보통 차로변경은 간격을 지킨다. 합류차에 뒤차가 양보한 경우에는
@@ -649,10 +720,22 @@ class Corridor {
       const acceptedGain = forcedMerge ? Math.max(gain, thr + 0.01) : gain;
       if (acceptedGain > thr && acceptedGain > bestGain) { bestGain = acceptedGain; bestLane = tl; }
     }
-    if (v.pendingLane >= 0 && v.pendingLane !== bestLane) {
+    /* ★ 해야 하는 차로변경(합류·유출)은 틈이 잠깐 사라져도 지시등을 끄지 않는다.
+       틈이 깨질 때마다 지시등과 대기시간을 처음부터 다시 세면, 틈이 흘러가는 밀집
+       차로에서는 끝내 못 들어가 가속차로 끝에 멈춰 섰다가 정지 상태로 밀고 들어갔다.
+       그 급제동이 합류부에 큰 정체를 고정해 다른 곳의 정체를 모두 가렸다. */
+    const mandLane = mand.dir !== 0 && mand.urg > 0.1 && opts.includes(cur + mand.dir) ? cur + mand.dir : -1;
+    if (v.pendingLane >= 0 && v.pendingLane !== bestLane && v.pendingLane !== mandLane) {
       v.pendingLane = -1; v.signalT = 0; v.blink = 0;
     }
-    if (bestLane < 0) return;
+    if (bestLane < 0) {
+      if (mandLane >= 0 && v.pendingLane < 0) {
+        v.pendingLane = mandLane;
+        v.signalT = 0.85 + this.rng.next() * 0.35;
+        v.blink = mandLane > cur ? 1 : -1;
+      }
+      return;
+    }
     if (v.pendingLane !== bestLane) {
       // 방향지시등을 먼저 켜고 안전한 틈이 유지되는지 다음 판단에서 다시 확인한다.
       v.pendingLane = bestLane;
@@ -681,7 +764,7 @@ class Corridor {
       const a = this.auxAt(v.s);
       if (this.isExiting(v, a)) return { dir: 0, urg: 0 };
       const end = a ? a.s1 : v.s;
-      const merge = a && a.type === 'accel';
+      const merge = !!a && a.type !== 'decel';   // 가속·오르막 차로 끝은 모두 합류점
       urg = clamp(1 - (end - v.s) / (merge ? 620 : 260), 0, 1);
       return { dir: -1, urg: Math.max(urg, 0.15) };
     }
@@ -846,37 +929,40 @@ class Corridor {
   }
 
   phantomDelay(site, pressure) {
-    const ratePerHour = 0.30 * site.weight * (0.35 + 1.1 * pressure);
+    const ratePerHour = 2.0 * site.weight * (0.4 + pressure);   // 작은 교란은 흔하다
     return this.phantomRng.exp(3600 / Math.max(ratePerHour, 0.02));
   }
 
-  seedPhantomAtSite(site) {
-    const band = 155;
-    const groups = [];
+  /* 유령정체의 씨앗은 '한 사람의 가벼운 브레이크'다 (Sugiyama et al. 2008).
+     그 자리에서 가장 붐비는 주행차로의 차 한 대가 3~5 초 동안 15~35 % 감속한다.
+     밀도가 임계 부근이면 뒤따르는 차들의 반응 지연과 정체 기억이 이것을
+     정지파로 키우고, 한산하면 몇 대 뒤에서 흡수되어 사라진다 — 이 차이가 핵심이다.
+     ★ 모든 차로에 차가 있어야 발동하게 하면 지정차로제로 1차로가 비는 순간
+     아예 발동하지 않는다. */
+  seedPhantomAtSite(site, force) {
+    const band = 200;
+    let best = -1, bestN = 0;
     for (let li = 0; li < this.nLane; li++) {
       const arr = this.lanes[li];
-      const k0 = this.seek(arr, site.s - band), k1 = this.seek(arr, site.s + band);
-      const group = [];
-      for (let i = k0; i < k1; i++) {
-        const v = arr[i];
-        if (v.obstacle || v.isPlayer || v.v < 7 || v.phantomUntil > this.time) continue;
-        group.push(v);
-      }
-      if (!group.length) return 0; // seed all 주행차로에 파동을 동시에 심을 수 있을 때만 발동
-      groups.push(group);
+      const n = this.seek(arr, site.s + band) - this.seek(arr, site.s - band);
+      if (n > bestN) { bestN = n; best = li; }
     }
-
-    let count = 0;
-    for (const group of groups) {
-      for (const v of group) {
-        const target = Math.max(5.5, Math.min(v.v * this.phantomRng.range(0.50, 0.68), v.v0own * 0.55));
-        v.phantomTargetV = target;
-        v.phantomUntil = this.time + this.phantomRng.range(8, 15);
-        count++;
+    if (best < 0) return 0;
+    const dens = bestN / (2 * band / 1000);                 // 대/km/차로
+    if (!force && dens < 15) return 0;
+    const arr = this.lanes[best];
+    let k = this.seek(arr, site.s), pick = null;
+    for (let d = 0; d < 8 && !pick; d++) {
+      for (const j of [k + d, k - 1 - d]) {
+        const v = arr[j];
+        if (v && !v.obstacle && !v.isPlayer && v.v > 14 && v.phantomUntil <= this.time) { pick = v; break; }
       }
     }
-    if (count) site.events = (site.events || 0) + 1;
-    return count;
+    if (!pick) return 0;
+    pick.phantomTargetV = pick.v * this.phantomRng.range(force ? 0.45 : 0.65, force ? 0.6 : 0.85);
+    pick.phantomUntil = this.time + this.phantomRng.range(3, 5);
+    site.events = (site.events || 0) + 1;
+    return 1;
   }
 
   seedFeaturePhantomJams(force) {
@@ -895,7 +981,7 @@ class Corridor {
         if (pick <= 0) { index = i; break; }
       }
       const site = candidates.splice(index, 1)[0];
-      if (this.seedPhantomAtSite(site)) {
+      if (this.seedPhantomAtSite(site, force)) {
         site.nextAt = this.time + this.phantomDelay(site, pressure);
         seeded++;
       }
@@ -909,8 +995,7 @@ class Corridor {
     for (const site of this.phantomSites) {
       if (this.time < site.nextAt) continue;
       site.nextAt = this.time + this.phantomDelay(site, pressure);
-      if (pressure < 0.12 || !this.phantomRng.chance(0.08 + 0.82 * pressure)) continue;
-      this.seedPhantomAtSite(site);
+      this.seedPhantomAtSite(site, false);
     }
   }
 
