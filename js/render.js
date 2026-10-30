@@ -132,11 +132,44 @@ const Scene = {
     this.sc = sc;
     this.pal = pal;
     this.road = sc.road;
+    // 해 방향 단위벡터 — sky() 의 태양과 같은 방위·고도라 그림자 쪽이 하늘과 맞는다
+    const sx = Math.cos(sc.sunAz) * 9000, sy = Math.sin(sc.sunAz) * 9000, sz = 2600;
+    const sl = Math.hypot(sx, sy, sz);
+    this.L = [sx / sl, sy / sl, sz / sl];
 
     this.sky(ctx, W, H, pal, sc);
     if (!sc.inTunnel) this.hills(ctx, W, H, pal, sc);
     this.corridor(ctx, sc);
     this.overlay(ctx, W, H, sc);
+  },
+
+  /* ---------- 빛 ----------
+     면의 밝기 = 하늘빛(위를 볼수록 밝다) + 햇빛(해를 볼수록 밝다).
+     고정 계수로 칠하던 때는 모든 차·비탈이 해와 무관하게 같은 쪽이 밝았다.
+     색 계산만 바뀌므로 칠하는 다각형 수는 늘지 않는다. */
+  lit(nx, ny, nz) {
+    const L = this.L, d = nx * L[0] + ny * L[1] + nz * L[2];
+    return 0.50 + 0.30 * (nz > 0 ? nz : 0) + 0.45 * (d > 0 ? d : 0);
+  },
+  /** 세 점이 만드는 면의 위쪽 법선으로 밝기 계수를 낸다 (지면·비탈용) */
+  litPts(a, b, c) {
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    return this.lit(nx / l, ny / l, nz / l);
+  },
+  /** 지면 사각형 — 면 방향으로 음영을 넣고, 띠마다 아주 조금 색을 흔들어 단조로움을 깬다 */
+  groundQuad(a, b, c, d, base, dist, seed) {
+    const f = this.litPts(a, b, d) / 0.88;           // 평지(위를 보는 면)가 원래 색이 되게
+    const j = seed != null ? 0.96 + ihash(seed) * 0.08 : 1;
+    this.quad(a, b, c, d, this.haze(shade(base, f * j * this.pal.amb + (1 - this.pal.amb) * 0.5), dist));
+  },
+  /** 본선과 램프가 같은 아스팔트 색을 쓰게 한다 (3 m 칸마다 아주 조금 다른 명도) */
+  roadTone(sRoad, dist) {
+    const mot = dist < 260 ? 0.94 + ihash(Math.floor(sRoad / 3)) * 0.12 : 1;
+    return this.haze(shade(this.pal.road, mot), dist);
   },
 
   /* ---------- 하늘 ---------- */
@@ -159,6 +192,7 @@ const Scene = {
       }
       ctx.globalAlpha = 1;
     } else {
+      this.clouds(ctx, H, pal, sc);
       // 태양
       const sun = Render.point(sc.cam.x + Math.cos(sc.sunAz) * 9000, sc.cam.y + Math.sin(sc.sunAz) * 9000, sc.cam.z + 2600);
       if (sun) {
@@ -168,6 +202,29 @@ const Scene = {
         gr.addColorStop(1, '#ffffff00');
         ctx.fillStyle = gr; ctx.fillRect(sun.x - H * 0.25, sun.y - H * 0.25, H * 0.5, H * 0.5);
       }
+    }
+  },
+
+  /** 구름 — 아주 먼 하늘의 고정된 점을 실제 카메라로 투영해 그린다. 고개·롤에 따라 하늘과
+      함께 움직이고, 구름 하나가 타원 몇 개라 프레임 비용은 무시할 만하다. */
+  clouds(ctx, H, pal, sc) {
+    const cam = sc.cam, rng = new RNG(11);
+    const col = sc.timeOfDay === 'dusk' ? '255,214,180' : '255,255,255';
+    for (let i = 0; i < 9; i++) {
+      const az = rng.next() * TAU, el = 0.10 + rng.next() * 0.22, D = 30000;
+      const big = 0.6 + rng.next() * 0.9, puffs = 3 + (rng.next() * 3 | 0);
+      const q = Render.point(cam.x + Math.cos(az) * D, cam.y + Math.sin(az) * D, cam.z + Math.tan(el) * D);
+      const r0 = rng.next(), r1 = rng.next();
+      if (!q) continue;
+      const w = H * 0.16 * big;
+      if (q.x < -w * 2 || q.x > Render.W + w * 2 || q.y < -w || q.y > Render.horizon) continue;
+      ctx.fillStyle = `rgba(${col},${(0.38 + r0 * 0.22).toFixed(2)})`;
+      ctx.beginPath();
+      for (let k = 0; k < puffs; k++) {
+        const ox = (k - (puffs - 1) / 2) * w * 0.42, oy = -Math.sin((k + 0.5) / puffs * Math.PI) * w * 0.10 * (0.6 + r1);
+        ctx.ellipse(q.x + ox, q.y + oy, w * (0.30 + 0.12 * Math.sin(k * 2.3 + r1 * 5)), w * 0.10, 0, 0, TAU);
+      }
+      ctx.fill();
     }
   },
 
@@ -389,20 +446,27 @@ const Scene = {
     }
   },
 
+  /* ★ 차는 '카메라 쪽 끝'이 속한 스트립 뒤에 그린다. 앞범퍼 기준으로 묶으면 뒤에서 본
+     차의 뒷부분이 더 가까운 스트립에 걸쳐, 그 스트립의 노면이 나중에 칠해지며 차 아랫부분을
+     잘라 먹었다. 또 앞범퍼가 카메라 뒤로 넘어간 차(옆을 스치는 차)는 뒷부분이 보이는데도
+     통째로 사라졌다 — 양 끝 중 하나라도 앞에 있으면 그린다. */
   bucket(buckets, stations, corr, v, sc) {
     const rd = this.road;
-    const sRoad = corr.roadS(v.s);
-    if (sRoad < stations[0] || sRoad > stations[stations.length - 1]) return;
-    // 이진탐색
+    const sF = corr.roadS(v.s), sR = corr.roadS(v.s - v.len);
+    const dAt = (sr) => {
+      const g = rd.at(sr);
+      const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
+      return Render.depth(g.x + Math.sin(g.hdg) * u, g.y - Math.cos(g.hdg) * u, g.z + 1 + (v.dz || 0));
+    };
+    const dF = dAt(sF), dR = dAt(sR);
+    if (dF < 0.12 && dR < 0.12) return;
+    const d = 0.5 * (dF + dR);
+    if (v.onRamp || v.lane === -1 || Math.min(dF, dR) < 24) { this.lateVeh.push({ v, corr, d }); return; }
+    const sNear = Math.abs(sF - sc.sCam) < Math.abs(sR - sc.sCam) ? sF : sR;
+    if (sNear < stations[0] || sNear > stations[stations.length - 1]) return;
     let lo = 0, hi = stations.length - 1;
-    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (stations[m] <= sRoad) lo = m; else hi = m - 1; }
-    const g = rd.at(sRoad);
-    const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
-    const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
-    const d = Render.depth(g.x + nx * u, g.y + ny * u, g.z + 1 + (v.dz || 0));
-    if (d < 0.12) return;
-    if (v.onRamp || v.lane === -1 || d < 24) this.lateVeh.push({ v, corr, d });
-    else (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d, g, u });
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (stations[m] <= sNear) lo = m; else hi = m - 1; }
+    (buckets[lo] || (buckets[lo] = [])).push({ v, corr, d });
   },
 
   /* ---------- 한 스트립 ---------- */
@@ -418,20 +482,19 @@ const Scene = {
     }
     if (!tun) {
       // ---- 지면 ----
-      const gc = this.haze(pal.grass, dist);
-      const rc = this.haze(pal.rock, dist);
+      const G = pal.grass, sd = Math.floor(a.sRoad / 37) * 8;   // 띠마다 색을 조금씩 흔드는 씨앗
       if (brg) {
         // 교량: 노면과 지면을 잇지 않고 골짜기 바닥을 그린다
         const aI = this.ptZ(a, a.aSh, this.terrAt(a, a.aSh)), bI = this.ptZ(b, b.aSh, this.terrAt(b, b.aSh));
         const aO = this.ptZ(a, a.aSh + 120, this.terrAt(a, a.aSh + 120)), bO = this.ptZ(b, b.aSh + 120, this.terrAt(b, b.aSh + 120));
-        this.quad(aI, bI, bO, aO, gc);
+        this.groundQuad(aI, bI, bO, aO, G, dist, sd + 1);
         const aI2 = this.ptZ(a, a.bSh, this.terrAt(a, a.bSh)), bI2 = this.ptZ(b, b.bSh, this.terrAt(b, b.bSh));
         const aO2 = this.ptZ(a, a.bSh - 120, this.terrAt(a, a.bSh - 120)), bO2 = this.ptZ(b, b.bSh - 120, this.terrAt(b, b.bSh - 120));
-        this.quad(aI2, bI2, bO2, aO2, gc);
+        this.groundQuad(aI2, bI2, bO2, aO2, G, dist, sd + 2);
       } else {
         // 비탈면 + 그 바깥 지형
         // 비탈면은 6 m 넘게 깎아낸 자리만 암반색으로 두고, 나머지는 초지로 덮는다
-        const slopeCol = (dz) => this.haze(dz > 6 ? mixHex(pal.grass, pal.rock, clamp((dz - 6) / 12, 0, 0.85)) : pal.grass, dist);
+        const slopeCol = (dz) => dz > 6 ? mixHex(pal.grass, pal.rock, clamp((dz - 6) / 12, 0, 0.85)) : pal.grass;
         // 오른쪽 — 램프가 있으면 램프 안쪽 경계에서 멈춘다
         const rInA = a.rampR ? a.rampR.in : null, rInB = b.rampR ? b.rampR.in : null;
         const dRa = rInA != null ? Math.min(a.dayR, rInA) - 0.2 : a.dayR;
@@ -439,19 +502,19 @@ const Scene = {
         const zRa = rInA != null && dRa < a.dayR ? a.g.z : a.dayRz;
         const zRb = rInB != null && dRb < b.dayR ? b.g.z : b.dayRz;
         if (dRa > a.aSh + 0.2 || dRb > b.aSh + 0.2) {
-          this.quad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
-            this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z));
+          this.groundQuad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
+            this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z), dist, sd + 3);
         }
         if (rInA == null && rInB == null) {
-          this.quad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
+          this.groundQuad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
             this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90)),
-            this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), gc);
+            this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), G, dist, sd + 5);
         } else {
           // 경계가 없는 쪽은 본선 비탈끝을 써서 램프 시작·끝의 지형을 삼각형으로 잇는다.
           const oA = a.rampR ? a.rampR.foot : a.dayR, oB = b.rampR ? b.rampR.foot : b.dayR;
           for (const [w0, w1] of [[0, 40], [40, 150]]) {
-            this.quad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
-              this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), gc);
+            this.groundQuad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
+              this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), G, dist, sd + 5 + w0);
           }
         }
 
@@ -462,18 +525,18 @@ const Scene = {
         const zLa = lInA != null && dLa > a.dayL ? a.g.z : a.dayLz;
         const zLb = lInB != null && dLb > b.dayL ? b.g.z : b.dayLz;
         if (dLa < a.bSh - 0.2 || dLb < b.bSh - 0.2) {
-          this.quad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
-            this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z));
+          this.groundQuad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
+            this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z), dist, sd + 4);
         }
         if (lInA == null && lInB == null) {
-          this.quad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
+          this.groundQuad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
             this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
-            this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), gc);
+            this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), G, dist, sd + 6);
         } else {
           const oA = a.rampL ? a.rampL.foot : a.dayL, oB = b.rampL ? b.rampL.foot : b.dayL;
           for (const [w0, w1] of [[0, 40], [40, 150]]) {
-            this.quad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
-              this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), gc);
+            this.groundQuad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
+              this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), G, dist, sd + 6 + w0);
           }
         }
         // 램프 바깥 비탈면은 지면이므로 본선 지면과 같은 원근 순서로 그린다
@@ -484,9 +547,7 @@ const Scene = {
     // ---- 포장 ----
     /* 스테이션 3 m 마다 아스팔트 명도를 아주 조금 흔든다. 폴리곤을 더 쓰지 않고도
        노면이 흘러가 보여, 속도가 눈에 읽힌다 — 주행감에 가장 크게 기여하는 부분이다. */
-    const cell = Math.floor(a.sRoad / 3);
-    const mot = dist < 260 ? 0.94 + ihash(cell) * 0.12 : 1;
-    const road = this.haze(shade(pal.road, mot), dist);
+    const road = this.roadTone(a.sRoad, dist);
     const shoulder = this.haze(shade(pal.road, 0.86), dist);
     const median = this.haze(shade(pal.road, 0.78), dist);
     this.quad(this.pt(a, a.bIn, 0), this.pt(b, b.bIn, 0), this.pt(b, b.aIn, 0), this.pt(a, a.aIn, 0), median);
@@ -496,6 +557,19 @@ const Scene = {
     // B 방향
     this.quad(this.pt(a, a.bIn, 0), this.pt(b, b.bIn, 0), this.pt(b, b.bAux, 0), this.pt(a, a.bAux, 0), road);
     this.quad(this.pt(a, a.bAux, 0), this.pt(b, b.bAux, 0), this.pt(b, b.bSh, 0), this.pt(a, a.bSh, 0), shoulder);
+    /* 차로 가운데의 기름때 띠 — 실제 고속도로에서 차로가 가장 또렷이 읽히는 무늬다.
+       가까운 곳만 (차로당 사각형 하나) 그려 비용이 작다. */
+    if (dist < 170) {
+      const oil = this.haze(shade(pal.road, 0.90), dist), lw = RoadStd.laneW, dzo = 0.004;
+      for (let i = 0; i < a.nA; i++) {
+        const ua = a.aLane0 + lw * (i + 0.5), ub = b.aLane0 + lw * (i + 0.5);
+        this.quad(this.pt(a, ua - 0.55, dzo), this.pt(b, ub - 0.55, dzo), this.pt(b, ub + 0.55, dzo), this.pt(a, ua + 0.55, dzo), oil);
+      }
+      for (let i = 0; i < a.nB; i++) {
+        const ua = a.bLane0 - lw * (i + 0.5), ub = b.bLane0 - lw * (i + 0.5);
+        this.quad(this.pt(a, ua - 0.55, dzo), this.pt(b, ub - 0.55, dzo), this.pt(b, ub + 0.55, dzo), this.pt(a, ua + 0.55, dzo), oil);
+      }
+    }
 
     if (lod >= 1) this.markings(ctx, a, b, dist, sc);
     this.barriers(ctx, a, b, dist, lod, brg, tun, sc);
@@ -528,11 +602,18 @@ const Scene = {
     if (Math.abs(t0 - t1) < 0.01) return;
     const h0 = corr.rampHalf(t0), h1 = corr.rampHalf(t1);
     if (h0 <= 0.05 && h1 <= 0.05) return;
-    const inA = corr.rampLat(t0) - h0, outA = corr.rampLat(t0) + h0;
-    const inB = corr.rampLat(t1) - h1, outB = corr.rampLat(t1) + h1;
+    const outA = corr.rampLat(t0) + h0, outB = corr.rampLat(t1) + h1;
+    /* ★ 램프 안쪽 가장자리는 본선 바깥 차선(가장자리 실선 포함) 밖으로만 둔다.
+       노즈 뒤 100 m 남짓은 폭이 옆으로 빠지는 속도보다 빨리 벌어져, 그대로 두면 램프
+       노면이 본선 끝 차로를 1 m 넘게 덮어 차선과 가장자리선이 끊겨 보였다. */
+    const edgeOf = (sec) => (corr.dir > 0 ? sec.aAux - sec.g.med : -sec.bAux - sec.g.med) + 0.12;
+    const eA = edgeOf(a), eB = edgeOf(b);
+    const rawInA = corr.rampLat(t0) - h0, rawInB = corr.rampLat(t1) - h1;
+    const inA = Math.max(rawInA, eA), inB = Math.max(rawInB, eB);
     const sh = 1.6;
     const pal = this.pal;
-    const road = this.haze(pal.road, dist);
+    // 본선과 같은 아스팔트 색 — 접속부에서 색이 갈라지지 않게
+    const road = this.roadTone(a.sRoad, dist);
     const shoulder = this.haze(shade(pal.road, 0.86), dist);
     const white = this.haze(sc.timeOfDay === 'night' ? '#eceade' : '#f2f2ec', dist);
     const P = (sec, u, t) => {
@@ -546,16 +627,21 @@ const Scene = {
       const ea = P(a, outA + sh, t0), eb = P(b, outB + sh, t1);
       const fa = this.rampFoot(a, side * (a.g.med + outA + sh), ea[2], side);
       const fb = this.rampFoot(b, side * (b.g.med + outB + sh), eb[2], side);
-      this.quad(ea, eb, this.ptZ(b, fb[0], fb[1]), this.ptZ(a, fa[0], fa[1]), this.haze(pal.grass, dist));
+      this.groundQuad(ea, eb, this.ptZ(b, fb[0], fb[1]), this.ptZ(a, fa[0], fa[1]), pal.grass, dist, 91 + Math.floor(a.sRoad / 37));
       return;
     }
     // 포장 + 바깥 갓길
-    this.quad(P(a, inA, t0), P(b, inB, t1), P(b, outB, t1), P(a, outA, t0), road);
+    if (outA - inA > 0.05 || outB - inB > 0.05) {
+      this.quad(P(a, Math.min(inA, outA), t0), P(b, Math.min(inB, outB), t1), P(b, outB, t1), P(a, outA, t0), road);
+    }
     this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
     if (dist < 520) {
       // 바깥 가장자리선. 안쪽은 노즈 부근에서 본선과 이어지므로 그리지 않는다
       this.quad(P(a, outA - 0.31, t0), P(b, outB - 0.31, t1), P(b, outB - 0.13, t1), P(a, outA - 0.13, t0), white);
-      if (t0 > 70) {
+      /* 안쪽(왼쪽) 가장자리선 — 램프 노면이 있는 구간 전체에 긋는다. 노즈 부근에서는 본선
+         가장자리선과 V 자로 모여 실제 분류·합류부(gore) 모양이 된다.
+         ★ '본선에서 떨어진 뒤부터'만 그으면 나가고 들어오는 구간의 왼쪽 선이 비었다. */
+      if (outA - inA > 0.9 && outB - inB > 0.9) {
         this.quad(P(a, inA + 0.13, t0), P(b, inB + 0.13, t1), P(b, inB + 0.31, t1), P(a, inA + 0.31, t0), white);
       }
     }
@@ -640,8 +726,9 @@ const Scene = {
 
     // ---- 가까운 곳만: 노면 이음매 · 캣츠아이 · 갓길 요철 ----
     const seamZ = 0.006;
-    // 포장 이음매 — 12 m 마다 옅은 가로줄. 값싼 광학 흐름이다
-    const seamC = this.haze(shade(this.pal.road, 0.86), dist);
+    /* 포장 이음매 — 12 m 마다 옅은 가로줄. 값싼 광학 흐름이다.
+       ★ 진하고 두꺼우면(0.86 · 0.36 m) 위에서 볼 때 차 없이 떠 있는 검은 막대로 보였다. */
+    const seamC = this.haze(shade(this.pal.road, 0.95), dist);
     let k = Math.floor(a.sRoad / 12);
     while (k * 12 < b.sRoad) {
       const ss = k * 12; k++;
@@ -650,7 +737,7 @@ const Scene = {
       const wA = this.pt(a, a.aIn, seamZ), wB = this.pt(b, b.aIn, seamZ);
       const eA = this.pt(a, a.aSh, seamZ), eB = this.pt(b, b.aSh, seamZ);
       const p0 = L3(wA, wB, t), p1 = L3(eA, eB, t);
-      const t2 = Math.min(1, t + 0.36 / Math.max(span, 0.5));
+      const t2 = Math.min(1, t + 0.18 / Math.max(span, 0.5));
       const p2 = L3(eA, eB, t2), p3 = L3(wA, wB, t2);
       this.quad(p0, p1, p2, p3, seamC);
     }
@@ -673,7 +760,7 @@ const Scene = {
     }
     // 갓길 요철 포장 — 차로를 벗어나면 이 줄무늬가 빠르게 스친다
     if (dist < 46) {
-      const rum = this.haze(shade(this.pal.road, 0.72), dist);
+      const rum = this.haze(shade(this.pal.road, 0.84), dist);   // 진하면(0.72) 위에서 끊긴 막대로 보였다
       let r = Math.floor(a.sRoad / 2.4);
       while (r * 2.4 < b.sRoad) {
         const ss = r * 2.4; r++;
@@ -823,8 +910,8 @@ const Scene = {
       const za0 = coveredTerrain(a, boresA, u0), za1 = coveredTerrain(a, boresA, u1);
       const zb0 = coveredTerrain(b, boresB, u0), zb1 = coveredTerrain(b, boresB, u1);
       const rise = ((za0 + za1) / 2) - a.g.z;
-      const col = this.haze(rise > 24 ? mixHex(pal.grass, pal.rock, clamp((rise - 24) / 40, 0, 0.7)) : pal.grass, dist);
-      this.quad(this.ptZ(a, u0, za0), this.ptZ(b, u0, zb0), this.ptZ(b, u1, zb1), this.ptZ(a, u1, za1), col);
+      const base = rise > 24 ? mixHex(pal.grass, pal.rock, clamp((rise - 24) / 40, 0, 0.7)) : pal.grass;
+      this.groundQuad(this.ptZ(a, u0, za0), this.ptZ(b, u0, zb0), this.ptZ(b, u1, zb1), this.ptZ(a, u1, za1), base, dist, i * 13 + Math.floor(a.sRoad / 37));
     }
     /* 옆구리 — 노면 높이에서 산등성이까지 세운 면. 굴 바깥을 막아 준다.
        ★ 타원 굴은 노면 위 tunnelCz 에서 가장 넓어 hw 보다 바깥으로 나간다.
@@ -921,7 +1008,12 @@ const Scene = {
      실루엣을 만든다. 거리가 멀면 단면 수를 줄인다. */
 
   /** 차종별 종단 실루엣 — [길이방향 x, 반폭, 바닥높이, 지붕높이] */
+  /** 차종별 종단 실루엣 — 차종마다 한 번만 만들어 둔다 (매 프레임 차마다 배열을 새로 만들지 않게) */
   profileOf(cls, p) {
+    if (p._prof !== undefined) return p._prof;
+    return (p._prof = this.makeProfile(cls, p));
+  },
+  makeProfile(cls, p) {
     const L = p.len / 2, W = p.wid / 2;
     if (cls === 'car') {
       return [
@@ -950,6 +1042,10 @@ const Scene = {
       볼록한 형상이므로 면을 정렬할 필요 없이 "먼 쪽부터" 순서만 지키면 된다:
       길이방향은 카메라 반대쪽 끝에서부터, 좌우는 먼 쪽 옆면 -> 지붕 -> 가까운 쪽 옆면. */
   hull(ctx, cx, cy, cz, hdg, prof, color, dist, glassBand) {
+    /* ★ 바깥에서 본 볼록한 차체에서는 바닥면, 먼 쪽 옆면·유리, 먼 쪽 마구리가 절대 보이지
+       않는다. 예전에는 이것까지 모두 칠해 차 한 대가 40면을 넘었다(프레임 칠하기의 절반).
+       보이는 면 — 지붕, 가까운 옆면, 카메라 쪽 마구리 — 만 그린다. 카메라가 차 안에 있는
+       운전석 시점의 내 차는 vehicle() 에서 아예 건너뛴다. */
     const ch = Math.cos(hdg), sh = Math.sin(hdg);
     const amb = this.pal.amb;
     const P = (x, y, z) => [cx + ch * x - sh * y, cy + sh * x + ch * y, cz + z];
@@ -958,55 +1054,44 @@ const Scene = {
     const camAhead = ch * dx + sh * dy > 0;          // 카메라가 차 앞쪽에 있는가
     const camLeft = -sh * dx + ch * dy > 0;          // 카메라가 차 왼쪽에 있는가
     const nearSign = camLeft ? 1 : -1;               // 가까운 옆면의 부호
-    const farSign = -nearSign;
     const gc = glassBand ? this.haze(shade('#262b34', 0.75 * amb + 0.25), dist) : null;
-
-    const sideQuads = (A, B, sgn) => {
-      const col = tone(sgn === nearSign ? 0.78 : 0.66);
-      this.quadPts(P(A[0], A[1] * sgn, A[2]), P(B[0], B[1] * sgn, B[2]),
-        P(B[0], B[1] * sgn, B[3]), P(A[0], A[1] * sgn, A[3]), col);
-      if (!gc) return;
-      const ha = A[3] - glassBand.h, hb = B[3] - glassBand.h;
-      if (A[3] - A[2] < glassBand.min || B[3] - B[2] < glassBand.min) return;
-      if (ha <= A[2] + 0.06 || hb <= B[2] + 0.06) return;
-      // 캐빈(지붕이 높은 구간)에만 유리를 두른다. 이 조건이 없으면 트렁크·보닛 옆면까지
-      // 검게 덮여 차가 속이 빈 상자처럼 보인다.
-      const top = glassBand.top || 0;
-      if (A[3] < top || B[3] < top) return;
-      const ea = (A[1] + 0.012) * sgn, eb = (B[1] + 0.012) * sgn;
-      this.quadPts(P(A[0], ea, ha), P(B[0], eb, hb), P(B[0], eb, B[3] - 0.07), P(A[0], ea, A[3] - 0.07), gc);
-    };
-
-    // 바닥면 — 가장 먼저 깔아 차 밑으로 노면이 비치지 않게 한다
-    const floor = this.haze(shade(color, 0.30 * amb + 0.12), dist);
-    for (let i = 0; i < prof.length - 1; i++) {
-      const A = prof[i], B = prof[i + 1];
-      this.quadPts(P(A[0], -A[1], A[2]), P(B[0], -B[1], B[2]), P(B[0], B[1], B[2]), P(A[0], A[1], A[2]), floor);
-    }
-
-    // 카메라 반대쪽 마구리 (거의 안 보이지만 실루엣의 빈틈을 막는다)
-    const F = prof[prof.length - 1], Rr = prof[0];
-    const cap = (S, f) => this.quadPts(P(S[0], -S[1], S[2]), P(S[0], S[1], S[2]),
-      P(S[0], S[1], S[3]), P(S[0], -S[1], S[3]), tone(f));
-    if (camAhead) cap(Rr, 0.58); else cap(F, 0.86);
+    // 면 밝기 — 해 방향 (옆면 법선은 차체 좌우축, 마구리는 진행축)
+    const fSide = this.lit(-sh * nearSign, ch * nearSign, 0) * 0.92;
+    const fFront = this.lit(ch, sh, 0) * 0.95, fRear = this.lit(-ch, -sh, 0) * 0.95;
+    const sideCol = tone(fSide);
 
     const n = prof.length - 1;
     for (let k = 0; k < n; k++) {
       const i = camAhead ? k : (n - 1 - k);          // 먼 쪽 끝에서부터
       const A = prof[i], B = prof[i + 1];
-      sideQuads(A, B, farSign);
-      this.quadPts(P(A[0], -A[1], A[3]), P(B[0], -B[1], B[3]), P(B[0], B[1], B[3]), P(A[0], A[1], A[3]), tone(1.0));
-      sideQuads(A, B, nearSign);
+      // 지붕 — 기울기(앞유리·뒷유리 쪽)에 따라 법선이 앞뒤로 눕는다
+      const s = (B[3] - A[3]) / Math.max(0.05, B[0] - A[0]);
+      const nl = 1 / Math.sqrt(1 + s * s);
+      const roof = tone(this.lit(-s * nl * ch, -s * nl * sh, nl));
+      this.quadPts(P(A[0], -A[1], A[3]), P(B[0], -B[1], B[3]), P(B[0], B[1], B[3]), P(A[0], A[1], A[3]), roof);
+      const sg = nearSign;
+      this.quadPts(P(A[0], A[1] * sg, A[2]), P(B[0], B[1] * sg, B[2]),
+        P(B[0], B[1] * sg, B[3]), P(A[0], A[1] * sg, A[3]), sideCol);
+      if (gc && A[3] - A[2] >= glassBand.min && B[3] - B[2] >= glassBand.min) {
+        const ha = A[3] - glassBand.h, hb = B[3] - glassBand.h, top = glassBand.top || 0;
+        // 캐빈(지붕이 높은 구간)에만 유리를 두른다 — 트렁크·보닛까지 덮으면 속 빈 상자처럼 보인다
+        if (ha > A[2] + 0.06 && hb > B[2] + 0.06 && A[3] >= top && B[3] >= top) {
+          const ea = (A[1] + 0.012) * sg, eb = (B[1] + 0.012) * sg;
+          this.quadPts(P(A[0], ea, ha), P(B[0], eb, hb), P(B[0], eb, B[3] - 0.07), P(A[0], ea, A[3] - 0.07), gc);
+        }
+      }
     }
 
     // 카메라 쪽 마구리
-    if (camAhead) cap(F, 0.88); else cap(Rr, 0.60);
+    const F = prof[n], Rr = prof[0];
+    const cap = (S, f) => this.quadPts(P(S[0], -S[1], S[2]), P(S[0], S[1], S[2]),
+      P(S[0], S[1], S[3]), P(S[0], -S[1], S[3]), tone(f));
+    if (camAhead) cap(F, fFront); else cap(Rr, fRear);
 
-    // 앞유리와 뒷유리 — 지붕선이 가장 가파르게 오르내리는 구간이 곧 유리면이다.
-    // 지붕보다 아주 살짝 위에 얹어 그 자리를 덮게 한다.
+    // 앞유리와 뒷유리 — 지붕선이 가장 가파르게 오르내리는 구간이 곧 유리면이다
     if (gc) {
       let iBack = -1, dBack = 0.06, iWind = -1, dWind = 0.06;
-      for (let i = 0; i < prof.length - 1; i++) {
+      for (let i = 0; i < n; i++) {
         const d = prof[i + 1][3] - prof[i][3];
         if (d > dBack) { dBack = d; iBack = i; }
         if (-d > dWind) { dWind = -d; iWind = i; }
@@ -1017,9 +1102,15 @@ const Scene = {
         this.quadPts(P(A[0], -A[1] * 0.84, A[3] + 0.012), P(B[0], -B[1] * 0.84, B[3] + 0.012),
           P(B[0], B[1] * 0.84, B[3] + 0.012), P(A[0], A[1] * 0.84, A[3] + 0.012), gc);
       };
-      // 먼 쪽 유리를 먼저
-      if (camAhead) { pane(iBack); pane(iWind); } else { pane(iWind); pane(iBack); }
+      // 카메라 쪽 유리만 — 반대쪽 유리는 지붕 너머라 보이지 않는다
+      pane(camAhead ? iWind : iBack);
     }
+  },
+  /** 거리별 단순화 — 멀수록 단면을 덜어 낸다 (실루엣은 화면에서 몇 픽셀이라 차이가 안 보인다) */
+  lodProf(prof, dist) {
+    if (dist < 200 || prof.length <= 3) return prof;
+    if (dist < 480) return prof._l1 || (prof._l1 = prof.filter((_, i) => i === 0 || i === prof.length - 1 || i % 2 === 0));
+    return prof._l2 || (prof._l2 = [prof[0], prof[prof.length >> 1], prof[prof.length - 1]]);
   },
 
   tri(a, b, c, style) {
@@ -1074,18 +1165,22 @@ const Scene = {
 
     const near = dist < 190;
     const wheelCol = '#141619';
-    /* 바퀴는 차체보다 '나중에' 그려야 한다. 먼저 그리면 차체 옆면이 통째로 덮어 버려
-       바퀴가 사라진다. 차체 바깥면에 살짝 걸치도록 붙인다. */
+    /* ★ 바퀴는 차체보다 '먼저' 그린다. 나중에 그리면 뒤·위에서 볼 때 앞바퀴가 차체를
+       뚫고 뒷유리 자리에 검은 판으로 떠 보였다. 먼저 그리면 차체가 윗부분을 가리고
+       문턱 아래만 남아 바퀴집처럼 보인다(옆면은 바닥 0.4 m 에서 시작한다). */
     /* 앞바퀴는 조향각만큼 돌려 그린다. 바퀴가 안 돌면 조향이 숫자만 바뀌는 느낌이 난다.
        pairs 의 첫 항목을 앞축으로 본다. */
     const steerAng = v.isPlayer ? -(v.steer || 0) * 0.42 : clamp((v.yawRel || 0) * 1.8, -0.35, 0.35);
     const putWheels = (ox, halfW, r, pairs) => {
       if (!near) return;
-      for (let pi = 0; pi < pairs.length; pi++) {
+      // 먼 바퀴부터 — 카메라에서 먼 축, 먼 쪽 바퀴를 먼저 칠한다
+      const camF = ch * (Render.cx - ox.x) + sh * (Render.cy - ox.y);
+      const order = pairs.map((_, i) => i).sort((i, j) => camF > 0 ? pairs[i] - pairs[j] : pairs[j] - pairs[i]);
+      const sides = -sh * (Render.cx - ox.x) + ch * (Render.cy - ox.y) > 0 ? [-1, 1] : [1, -1];
+      for (const pi of order) {
         const px = pairs[pi];
         const wh = hdg + (pi === 0 ? steerAng : 0);
-        const cw = Math.cos(wh), sw = Math.sin(wh);
-        for (const side of [-1, 1]) {
+        for (const side of sides) {
           const wx = ox.x + ch * px - sh * halfW * side, wy = ox.y + sh * px + ch * halfW * side;
           this.box(ctx, wx, wy, bz, hdg, r * 2.05, 0.24, r * 2, 0, wheelCol, 1, dist, false, wh);
         }
@@ -1102,24 +1197,24 @@ const Scene = {
         this.box(ctx, c2.x, c2.y, bz, hdg, trlL, p.wid, 3.05, 1.12, boxCol, 1, dist);
         if (near) this.box(ctx, c2.x, c2.y, bz, hdg, trlL * 0.98, p.wid * 0.92, 0.55, 0.55, shade(boxCol, 0.55), 1, dist);
       };
-      const cabProf = [
+      const cabProf = p._cab || (p._cab = [
         [-cabL / 2, p.wid * 0.44, 0.95, 2.60],
         [cabL * 0.28, p.wid * 0.50, 0.90, 3.30],
         [cabL * 0.44, p.wid * 0.50, 0.88, 3.18],
         [cabL * 0.50, p.wid * 0.43, 0.92, 2.60],
-      ];
-      const drawCab = () => this.hull(ctx, c1.x, c1.y, bz, hdg, cabProf, v.color, dist, near ? { h: 1.00, min: 1.4, top: 2.9 } : null);
+      ]);
+      const drawCab = () => this.hull(ctx, c1.x, c1.y, bz, hdg, this.lodProf(cabProf, dist), v.color, dist, near ? { h: 1.00, min: 1.4, top: 2.9 } : null);
       // 먼 쪽부터 그린다 — 순서를 뒤집으면 뒤에 있어야 할 캡이 적재함을 덮어 버린다
       const camAheadT = ch * (Render.cx - bx) + sh * (Render.cy - by) > 0;
-      if (camAheadT) { drawTrailer(); drawCab(); } else { drawCab(); drawTrailer(); }
       putWheels(c2, p.wid * 0.47, 0.53, [-trlL * 0.34, -trlL * 0.34 + 1.4]);
       putWheels(c1, p.wid * 0.47, 0.53, [cabL * 0.31, -cabL * 0.26]);
+      if (camAheadT) { drawTrailer(); drawCab(); } else { drawCab(); drawTrailer(); }
     } else if (v.cls === 'bus') {
-      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('bus', p), v.color, dist, near ? { h: 1.30, min: 1.6, top: 3.0 } : null);
       putWheels({ x: cxx, y: cyy }, p.wid * 0.47, 0.53, [p.len * 0.34, -p.len * 0.29]);
+      this.hull(ctx, cxx, cyy, bz, hdg, this.lodProf(this.profileOf('bus', p), dist), v.color, dist, near ? { h: 1.30, min: 1.6, top: 3.0 } : null);
     } else {
-      this.hull(ctx, cxx, cyy, bz, hdg, this.profileOf('car', p), v.color, dist, near ? { h: 0.34, min: 0.55, top: 1.18 } : null);
       putWheels({ x: cxx, y: cyy }, p.wid * 0.415, 0.33, [p.len * 0.31, -p.len * 0.30]);
+      this.hull(ctx, cxx, cyy, bz, hdg, this.lodProf(this.profileOf('car', p), dist), v.color, dist, near ? { h: 0.34, min: 0.55, top: 1.18 } : null);
     }
 
     if (dist < 340) this.lights(ctx, v, corr, bx, by, bz, hdg, dist, sc);
@@ -1161,7 +1256,8 @@ const Scene = {
     }
     vis.sort((p, q) => q.cen - p.cen);
     for (const { f } of vis) {
-      const col = this.haze(shade(color, f.sh * amb + (1 - amb) * 0.42), dist);
+      const fl = f.n[2] < 0 ? 0.30 : this.lit(f.n[0], f.n[1], f.n[2]) * (f.n[2] > 0 ? 1 : 0.92);
+      const col = this.haze(shade(color, fl * amb + (1 - amb) * 0.42), dist);
       Render.begin();
       for (const i of f.idx) Render.add(c[i][0], c[i][1], c[i][2]);
       Render.fill(col);

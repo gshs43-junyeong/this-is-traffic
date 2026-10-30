@@ -54,13 +54,34 @@ const App = {
   },
 
   resize() {
-    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const dpr = Math.min(devicePixelRatio || 1, 2) * (this.res || 1);
     const w = this.cv.clientWidth, h = this.cv.clientHeight;
     this.cv.width = Math.max(320, Math.round(w * dpr));
     this.cv.height = Math.max(240, Math.round(h * dpr));
     this.W = this.cv.width; this.H = this.cv.height;
     // 화면이 크면 묘사 거리를 줄여 프레임을 지킨다
-    Render.quality = this.W > 1900 ? 0.82 : 1;
+    this.qBase = this.W > 1900 ? 0.82 : 1;
+    Render.quality = Math.min(Render.quality || 1, this.qBase);
+  },
+
+  /* 성능 자동 조절 — 느린 기기에서 프레임을 지킨다.
+     프레임 시간(지수평균)이 25 ms 를 넘으면 먼저 묘사 거리를, 그래도 느리면 렌더 해상도를
+     낮춘다. 14 ms 아래로 여유가 생기면 천천히 되돌린다. 2 초마다 한 단계씩만 움직여
+     화질이 깜빡이지 않게 한다. */
+  adapt(raw) {
+    if (!(raw > 0) || raw > 0.25) return;                 // 탭 전환·일시정지 직후는 무시
+    this.fMs = this.fMs ? this.fMs * 0.94 + raw * 1000 * 0.06 : raw * 1000;
+    this.adaptT = (this.adaptT || 0) + raw;
+    if (this.adaptT < 2) return;
+    this.adaptT = 0;
+    const q = Render.quality, res = this.res || 1;
+    if (this.fMs > 25) {
+      if (q > 0.62) Render.quality = Math.max(0.6, q - 0.1);
+      else if (res > 0.62) { this.res = Math.max(0.6, res - 0.15); this.resize(); }
+    } else if (this.fMs < 14) {
+      if (res < 1) { this.res = Math.min(1, res + 0.1); this.resize(); }
+      else if (q < this.qBase) Render.quality = Math.min(this.qBase, q + 0.05);
+    }
   },
 
   /* ---------- 세계 재생성 ---------- */
@@ -420,6 +441,7 @@ const App = {
     this.last = ts;
     const dt = Math.min(0.1, raw);
     this.frame++;
+    if (!this.paused) this.adapt(raw);
 
     if (!this.paused) {
       this.acc = (this.acc || 0) + dt * this.speedMul;
