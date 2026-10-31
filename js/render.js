@@ -95,7 +95,182 @@ const Render = {
     ctx.closePath();
     return true;
   },
-  fill(style) { if (this.path()) { this.ctx.fillStyle = style; this.ctx.fill(); } this._n = 0; },
+  fill(style) {
+    if (this.gl) { this.glPoly(style); this._n = 0; return; }
+    if (this.path()) { this.ctx.fillStyle = style; this.ctx.fill(); }
+    this._n = 0;
+  },
+
+  /* =====================================================================
+     WebGL 백엔드 — 깊이 버퍼로 가림을 픽셀 단위로 판정한다.
+     ★ 캔버스 2D 의 화가 알고리즘(먼 것부터 덧칠)은 면 순서가 조금만 어긋나도 앞차가
+     깨지고, 근거리 면을 직접 잘라야 했다. 장면 코드는 그대로 두고 칠하는 곳만 바꾼다:
+     fill() 이 다각형을 삼각형 버퍼에 쌓고, flush() 가 한 번에 GPU 로 그린다.
+     WebGL 이 없거나 문맥을 잃으면 예전 캔버스 2D 경로로 그대로 돈다.
+     ===================================================================== */
+  layer: 0,            // 노면 위 표시(차선·그림자 등) 층 — 같은 면 위에서 깜빡이지 않게 카메라 쪽으로 당긴다
+  initGL(canvas) {
+    let gl = null;
+    try { gl = canvas.getContext('webgl', { alpha: true, antialias: true, premultipliedAlpha: true, depth: true }); } catch (e) { gl = null; }
+    if (!gl) return false;
+    const sh = (type, src) => {
+      const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o));
+      return o;
+    };
+    const prog = (vs, fs) => {
+      const p = gl.createProgram();
+      gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      return p;
+    };
+    try {
+      // 정점은 이미 카메라 좌표(오른쪽 x · 위 y · 앞 z)라 투영만 한다
+      const VS = 'attribute vec3 p;attribute vec4 c;attribute vec2 q;uniform vec2 f;uniform vec2 d;varying vec4 v;varying vec2 w;' +
+        'void main(){v=c;w=q;gl_Position=vec4(p.x*f.x,p.y*f.y,d.x*p.z+d.y,p.z);}';
+      this.pSolid = prog(VS, 'precision mediump float;varying vec4 v;void main(){gl_FragColor=vec4(v.rgb*v.a,v.a);}');
+      // 빛 번짐 — 사각형 안에서 가운데가 밝고 가장자리로 사라진다 (더하기 합성)
+      this.pGlow = prog(VS, 'precision mediump float;varying vec4 v;varying vec2 w;void main(){float r=length(w);float k=clamp(1.0-r,0.0,1.0);k=k*k*(0.35+0.65*k);gl_FragColor=vec4(v.rgb*v.a*k,v.a*k);}');
+    } catch (e) { console.warn('WebGL 셰이더 실패 — 캔버스 2D 로 그린다', e); return false; }
+    this.gl = gl;
+    this.vb = { p: gl.createBuffer(), c: gl.createBuffer(), q: gl.createBuffer() };
+    const mk = () => ({ p: new Float32Array(3 * 65536), c: new Uint8Array(4 * 65536), q: null, n: 0 });
+    this.bOp = mk(); this.bTr = mk(); this.bMk = mk();
+    this.bGl = mk(); this.bGl.q = new Float32Array(2 * 65536);
+    this.colCache = new Map();
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; if (this.onLost) this.onLost(); });
+    return true;
+  },
+  /** '#rgb' · '#rrggbb' · '#rrggbbaa' · 'rgb()' · 'rgba()' -> [r,g,b,a] (0~255). 같은 문자열은 다시 풀지 않는다 */
+  color(str) {
+    let c = this.colCache.get(str);
+    if (c) return c;
+    if (str[0] === '#') {
+      let h = str.slice(1);
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      c = [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), h.length >= 8 ? parseInt(h.slice(6, 8), 16) : 255];
+    } else {
+      const m = str.match(/[\d.]+/g) || [0, 0, 0];
+      c = [+m[0], +m[1], +m[2], m.length > 3 ? Math.round(+m[3] * 255) : 255];
+    }
+    if (this.colCache.size > 30000) this.colCache.clear();
+    this.colCache.set(str, c);
+    return c;
+  },
+  _grow(b, need) {
+    if (b.n + need <= b.p.length / 3) return;
+    let cap = b.p.length / 3; while (cap < b.n + need) cap *= 2;
+    const p = new Float32Array(cap * 3); p.set(b.p); b.p = p;
+    const c = new Uint8Array(cap * 4); c.set(b.c); b.c = c;
+    if (b.q) { const q = new Float32Array(cap * 2); q.set(b.q); b.q = q; }
+  },
+  _vert(b, x, y, z, col, a) {
+    const i = b.n++;
+    b.p[i * 3] = x; b.p[i * 3 + 1] = y; b.p[i * 3 + 2] = z;
+    b.c[i * 4] = col[0]; b.c[i * 4 + 1] = col[1]; b.c[i * 4 + 2] = col[2]; b.c[i * 4 + 3] = a;
+  },
+  glPoly(style) {
+    const n = this._n;
+    if (n < 3) return;
+    const ax = this._ax, ay = this._ay, az = this._az;
+    let front = false;
+    for (let i = 0; i < n; i++) if (az[i] > 0.25) { front = true; break; }
+    if (!front) return;                              // 통째로 카메라 뒤 — GPU 까지 보낼 필요 없다
+    const col = this.color(style);
+    const a = Math.round(col[3] * this.ctx.globalAlpha);
+    if (a <= 0) return;
+    const b = a < 250 ? this.bTr : this.bOp;
+    this._grow(b, (n - 2) * 3);
+    const k = 1 - this.layer * 0.0025;              // 층마다 시선 방향으로 0.25 % 당긴다 (화면 위치는 그대로)
+    for (let i = 1; i < n - 1; i++) {
+      this._vert(b, ax[0] * k, ay[0] * k, az[0] * k, col, a);
+      this._vert(b, ax[i] * k, ay[i] * k, az[i] * k, col, a);
+      this._vert(b, ax[i + 1] * k, ay[i + 1] * k, az[i + 1] * k, col, a);
+    }
+  },
+  /** 카메라 좌표의 점 하나 */
+  camPt(x, y, z) {
+    const dx = x - this.cx, dy = y - this.cy, dz = z - this.cz;
+    return [dx * this.rx + dy * this.ry + dz * this.rz, dx * this.ux + dy * this.uy + dz * this.uz, dx * this.fx + dy * this.fy + dz * this.fz];
+  },
+  /** 화면 크기가 고정된 표시(시선유도표 반사지·먼 미등·방향지시등). GL 에서는 깊이 판정을 받는다 */
+  mark(x, y, z, wPx, hPx, style) {
+    if (!this.gl) {
+      const q = this.point(x, y, z); if (!q) return;
+      this.ctx.fillStyle = style; this.ctx.fillRect(q.x - wPx / 2, q.y - hPx / 2, wPx, hPx);
+      return;
+    }
+    const c = this.camPt(x, y, z);
+    if (c[2] < 0.3) return;
+    const k = 0.985, z0 = c[2] * k, sx = wPx / 2 * z0 / this.focal, sy = hPx / 2 * z0 / this.focal;
+    const X = c[0] * k, Y = c[1] * k, col = this.color(style), b = this.bMk;
+    this._grow(b, 6);
+    this._vert(b, X - sx, Y - sy, z0, col, col[3]); this._vert(b, X + sx, Y - sy, z0, col, col[3]); this._vert(b, X + sx, Y + sy, z0, col, col[3]);
+    this._vert(b, X - sx, Y - sy, z0, col, col[3]); this._vert(b, X + sx, Y + sy, z0, col, col[3]); this._vert(b, X - sx, Y + sy, z0, col, col[3]);
+  },
+  /** 빛 번짐 (반지름 rPx). GL 에서는 가려진 등불의 번짐이 앞차를 뚫고 보이지 않는다 */
+  glow(x, y, z, rPx, inner, mid, alpha) {
+    if (!this.gl) {
+      const q = this.point(x, y, z); if (!q) return;
+      const ctx = this.ctx, g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, rPx);
+      g.addColorStop(0, inner); g.addColorStop(0.35, mid); g.addColorStop(1, inner.slice(0, 7) + '00');
+      ctx.fillStyle = g; ctx.fillRect(q.x - rPx, q.y - rPx, rPx * 2, rPx * 2);
+      return;
+    }
+    const c = this.camPt(x, y, z);
+    if (c[2] < 0.3) return;
+    const k = 0.97, z0 = c[2] * k, r = rPx * z0 / this.focal, X = c[0] * k, Y = c[1] * k;
+    const col = this.color(inner.slice(0, 7)), a = Math.round(255 * (alpha == null ? 1 : alpha)), b = this.bGl;
+    this._grow(b, 6);
+    const V = (dx, dy) => { const i = b.n; this._vert(b, X + dx * r, Y + dy * r, z0, col, a); b.q[i * 2] = dx; b.q[i * 2 + 1] = dy; };
+    V(-1, -1); V(1, -1); V(1, 1); V(-1, -1); V(1, 1); V(-1, 1);
+  },
+  glBegin() { this.bOp.n = this.bTr.n = this.bMk.n = this.bGl.n = 0; },
+  glFlush() {
+    const gl = this.gl; if (!gl) return;
+    const W = gl.canvas.width, H = gl.canvas.height;
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 0); gl.clearDepth(1);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    const n = 0.25, F = 9000;
+    const draw = (prog, b, withQ) => {
+      if (!b.n) return;
+      gl.useProgram(prog);
+      const L = prog._loc || (prog._loc = {          // 위치는 프로그램마다 한 번만 찾는다
+        f: gl.getUniformLocation(prog, 'f'), d: gl.getUniformLocation(prog, 'd'),
+        p: gl.getAttribLocation(prog, 'p'), c: gl.getAttribLocation(prog, 'c'), q: gl.getAttribLocation(prog, 'q'),
+      });
+      gl.uniform2f(L.f, this.focal / (W / 2), this.focal / (H / 2));
+      gl.uniform2f(L.d, (F + n) / (F - n), -2 * F * n / (F - n));
+      const lp = L.p, lc = L.c, lq = L.q;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vb.p); gl.bufferData(gl.ARRAY_BUFFER, b.p.subarray(0, b.n * 3), gl.STREAM_DRAW);
+      gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vb.c); gl.bufferData(gl.ARRAY_BUFFER, b.c.subarray(0, b.n * 4), gl.STREAM_DRAW);
+      gl.enableVertexAttribArray(lc); gl.vertexAttribPointer(lc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+      if (lq >= 0) {
+        if (withQ) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, this.vb.q); gl.bufferData(gl.ARRAY_BUFFER, b.q.subarray(0, b.n * 2), gl.STREAM_DRAW);
+          gl.enableVertexAttribArray(lq); gl.vertexAttribPointer(lq, 2, gl.FLOAT, false, 0, 0);
+        } else { gl.disableVertexAttribArray(lq); gl.vertexAttrib2f(lq, 0, 0); }
+      }
+      gl.drawArrays(gl.TRIANGLES, 0, b.n);
+    };
+    gl.disable(gl.BLEND);
+    draw(this.pSolid, this.bOp, false);
+    draw(this.pSolid, this.bMk, false);
+    // 반투명(그림자) — 불투명 위에 순서대로, 깊이는 쓰지 않는다
+    gl.enable(gl.BLEND); gl.depthMask(false);
+    gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    draw(this.pSolid, this.bTr, false);
+    // 빛 번짐 — 더하기
+    gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE);
+    draw(this.pGlow, this.bGl, true);
+    gl.depthMask(true); gl.disable(gl.BLEND);
+  },
   /** 한 점의 화면 좌표 (뒤쪽이면 null) */
   point(x, y, z) {
     const dx = x - this.cx, dy = y - this.cy, dz = z - this.cz;
@@ -137,9 +312,13 @@ const Scene = {
     const sl = Math.hypot(sx, sy, sz);
     this.L = [sx / sl, sy / sl, sz / sl];
 
-    this.sky(ctx, W, H, pal, sc);
-    if (!sc.inTunnel) this.hills(ctx, W, H, pal, sc);
+    // GL 이면 하늘·원경은 맨 아래 2D 캔버스에, 3D 는 GL 에, 효과는 맨 위 2D 캔버스에 그린다
+    const skyCtx = Render.gl && sc.skyCtx ? sc.skyCtx : ctx;
+    if (Render.gl) { ctx.clearRect(0, 0, W, H); Render.glBegin(); }
+    this.sky(skyCtx, W, H, pal, sc);
+    if (!sc.inTunnel) this.hills(skyCtx, W, H, pal, sc);
     this.corridor(ctx, sc);
+    if (Render.gl) Render.glFlush();
     this.overlay(ctx, W, H, sc);
   },
 
@@ -358,12 +537,17 @@ const Scene = {
     const s0 = sc.sCam - 55, s1 = Math.min(rd.len, sc.sCam + Render.drawDist);
     // 스트립 station 목록 (가까울수록 촘촘)
     const stations = [];
-    let s = Math.max(0, s0);
+    /* ★ 단면은 세계 좌표 격자(4·8·16·32·64 m 의 배수)에 고정한다. 카메라 위치에서 세면
+       매 프레임 단면이 미끄러져 같은 산이 조금씩 다른 모양으로 다시 샘플링되고, 지형이
+       꿈틀거리며 불연속적으로 움직였다. 굵은 격자점은 고운 격자점의 부분집합이라
+       거리 띠가 바뀌어도 이미 있던 꼭짓점만 빠진다. */
+    let s = Math.floor(Math.max(0, s0) / 4) * 4;
     while (s < s1) {
       stations.push(s);
       const d = Math.abs(s - sc.sCam);
-      const step = d < 60 ? 4 : d < 170 ? 7 : d < 380 ? 13 : d < 700 ? 26 : 42;
-      s += rd.struct[rd.idxOf(s)] === 2 ? Math.min(step, 12) : step;
+      let step = d < 60 ? 4 : d < 170 ? 8 : d < 380 ? 16 : d < 700 ? 32 : 64;
+      if (rd.struct[rd.idxOf(s)] === 2 && step > 8) step = 8;
+      s = (Math.floor(s / step + 1e-6) + 1) * step;
     }
     stations.push(Math.min(s1, rd.len - 0.01));
     // 터널·교량 경계는 스트립 간격과 무관하게 정확한 지점에서 끊어 포털 틈을 막는다.
@@ -561,6 +745,7 @@ const Scene = {
        가까운 곳만 (차로당 사각형 하나) 그려 비용이 작다. */
     if (dist < 170) {
       const oil = this.haze(shade(pal.road, 0.90), dist), lw = RoadStd.laneW, dzo = 0.004;
+      Render.layer = 1;
       for (let i = 0; i < a.nA; i++) {
         const ua = a.aLane0 + lw * (i + 0.5), ub = b.aLane0 + lw * (i + 0.5);
         this.quad(this.pt(a, ua - 0.55, dzo), this.pt(b, ub - 0.55, dzo), this.pt(b, ub + 0.55, dzo), this.pt(a, ua + 0.55, dzo), oil);
@@ -569,6 +754,7 @@ const Scene = {
         const ua = a.bLane0 - lw * (i + 0.5), ub = b.bLane0 - lw * (i + 0.5);
         this.quad(this.pt(a, ua - 0.55, dzo), this.pt(b, ub - 0.55, dzo), this.pt(b, ub + 0.55, dzo), this.pt(a, ua + 0.55, dzo), oil);
       }
+      Render.layer = 0;
     }
 
     if (lod >= 1) this.markings(ctx, a, b, dist, sc);
@@ -631,12 +817,14 @@ const Scene = {
       return;
     }
     // 포장 + 바깥 갓길
+    Render.layer = 1;                                  // 본선 갓길과 겹치는 노면
     if (outA - inA > 0.05 || outB - inB > 0.05) {
       this.quad(P(a, Math.min(inA, outA), t0), P(b, Math.min(inB, outB), t1), P(b, outB, t1), P(a, outA, t0), road);
     }
     this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
+    Render.layer = 2;
     if (dist < 520) {
-      // 바깥 가장자리선. 안쪽은 노즈 부근에서 본선과 이어지므로 그리지 않는다
+      // 바깥 가장자리선
       this.quad(P(a, outA - 0.31, t0), P(b, outB - 0.31, t1), P(b, outB - 0.13, t1), P(a, outA - 0.13, t0), white);
       /* 안쪽(왼쪽) 가장자리선 — 램프 노면이 있는 구간 전체에 긋는다. 노즈 부근에서는 본선
          가장자리선과 V 자로 모여 실제 분류·합류부(gore) 모양이 된다.
@@ -645,12 +833,18 @@ const Scene = {
         this.quad(P(a, inA + 0.13, t0), P(b, inB + 0.13, t1), P(b, inB + 0.31, t1), P(a, inA + 0.31, t0), white);
       }
     }
+    Render.layer = 0;
   },
 
   /* ---------- 노면표시 ----------
      점선을 스트립 경계가 아니라 '실제 스테이션'에서 끊는다. 예전처럼 스트립 하나를
      통째로 칠하면 멀리서는 긴 흰 띠가 되어 속도가 전혀 읽히지 않았다. */
+  /** 차선·노면 표시 — 노면과 같은 면이라 GL 에서는 한 층 위로 당겨 그린다 */
   markings(ctx, a, b, dist, sc) {
+    Render.layer = 2;
+    try { this.markingsBody(ctx, a, b, dist, sc); } finally { Render.layer = 0; }
+  },
+  markingsBody(ctx, a, b, dist, sc) {
     const lw = RoadStd.laneW;
     const night = sc.timeOfDay === 'night';
     const white = this.haze(night ? '#eceade' : '#f2f2ec', dist);
@@ -826,10 +1020,10 @@ const Scene = {
       const post = (u) => {
         this.quad(this.pt(a, u, 0.55), this.pt(a, u, 0.55), this.pt(a, u, 1.0), this.pt(a, u, 1.0), col);
       };
-      const p1 = Render.point(...this.pt(a, a.aSh + 0.35, 0.95));
-      if (p1 && p1.z < 300) { ctx.fillStyle = col; ctx.fillRect(p1.x - 1, p1.y - 2, 2.1, 3.8); }
-      const p2 = Render.point(...this.pt(a, a.bSh - 0.35, 0.95));
-      if (p2 && p2.z < 300) { ctx.fillStyle = col; ctx.fillRect(p2.x - 1, p2.y - 2, 2.1, 3.8); }
+      const sz = Render.H / 720;
+      const q1 = this.pt(a, a.aSh + 0.35, 0.95), q2 = this.pt(a, a.bSh - 0.35, 0.95);
+      if (Render.depth(q1[0], q1[1], q1[2]) < 300) Render.mark(q1[0], q1[1], q1[2], 2.1 * sz, 3.8 * sz, col);
+      if (Render.depth(q2[0], q2[1], q2[2]) < 300) Render.mark(q2[0], q2[1], q2[2], 2.1 * sz, 3.8 * sz, col);
     }
   },
 
@@ -944,13 +1138,9 @@ const Scene = {
         pa = na; pb = nb;
       }
       if (Math.floor(a.sRoad / 25) !== Math.floor(b.sRoad / 25)) {
-        const p = Render.point(...this.pt(a, ga.c, RoadStd.tunnelH - 0.35));
-        if (p) {
-          const rr = clamp(220 / Math.max(p.z, 2), 2, 42);
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rr);
-          g.addColorStop(0, '#fff6d0'); g.addColorStop(0.35, '#ffeaa066'); g.addColorStop(1, '#ffeaa000');
-          ctx.fillStyle = g; ctx.fillRect(p.x - rr, p.y - rr, rr * 2, rr * 2);
-        }
+        const lp = this.pt(a, ga.c, RoadStd.tunnelH - 0.35);
+        const dz = Render.depth(lp[0], lp[1], lp[2]);
+        if (dz > 0.3) Render.glow(lp[0], lp[1], lp[2], clamp(220 / Math.max(dz, 2), 2, 42) * Render.H / 720, '#fff6d0', '#ffeaa066', 0.9);
       }
     }
     if (a.st !== 2 && b.st === 2) this.portal(ctx, b, dist);
@@ -1077,7 +1267,9 @@ const Scene = {
         // 캐빈(지붕이 높은 구간)에만 유리를 두른다 — 트렁크·보닛까지 덮으면 속 빈 상자처럼 보인다
         if (ha > A[2] + 0.06 && hb > B[2] + 0.06 && A[3] >= top && B[3] >= top) {
           const ea = (A[1] + 0.012) * sg, eb = (B[1] + 0.012) * sg;
+          Render.layer = 1;
           this.quadPts(P(A[0], ea, ha), P(B[0], eb, hb), P(B[0], eb, B[3] - 0.07), P(A[0], ea, A[3] - 0.07), gc);
+          Render.layer = 0;
         }
       }
     }
@@ -1103,7 +1295,9 @@ const Scene = {
           P(B[0], B[1] * 0.84, B[3] + 0.012), P(A[0], A[1] * 0.84, A[3] + 0.012), gc);
       };
       // 카메라 쪽 유리만 — 반대쪽 유리는 지붕 너머라 보이지 않는다
+      Render.layer = 1;
       pane(camAhead ? iWind : iBack);
+      Render.layer = 0;
     }
   },
   /** 거리별 단순화 — 멀수록 단면을 덜어 낸다 (실루엣은 화면에서 몇 픽셀이라 차이가 안 보인다) */
@@ -1155,11 +1349,13 @@ const Scene = {
     if (dist < 260) {
       const hl = p.len * 0.47, hw = p.wid * 0.45;
       ctx.globalAlpha = 0.42;
+      Render.layer = 3;
       Render.begin();
       for (const [ix, iy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
         Render.add(cxx + ch * hl * ix - sh * hw * iy, cyy + sh * hl * ix + ch * hw * iy, bz + 0.015);
       }
       Render.fill('#000000');
+      Render.layer = 0;
       ctx.globalAlpha = 1;
     }
 
@@ -1275,7 +1471,9 @@ const Scene = {
     const rearX = bx - ch * p.len, rearY = by - sh * p.len;
     const hw = p.wid * 0.40, zT = v.cls === 'car' ? 0.78 : 1.15;
     const tail = v.brake ? '#ff2a1e' : (night ? '#d1241c' : '#8e1a15');
-    const size = clamp(70 / dist, 0.8, 9);
+    const px = Render.H / 720;                         // 화면 해상도와 무관한 크기
+    const size = clamp(70 / dist, 0.8, 9) * px;
+    Render.layer = 1;
     for (const side of (facing < 0 ? [-1, 1] : [])) {
       const lx = rearX - sh * hw * side, ly = rearY + ch * hw * side;
       if (dist < 90) {
@@ -1285,40 +1483,24 @@ const Scene = {
         const P = (dy, dz) => [lx + nx * dy - ch * 0.02, ly + ny * dy - sh * 0.02, bz + zT + dz];
         this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), tail);
       } else {
-        const q = Render.point(lx, ly, bz + zT);
-        if (!q) continue;
-        ctx.fillStyle = tail;
-        ctx.fillRect(q.x - size * 0.55, q.y - size * 0.32, size * 1.1, size * 0.64);
+        Render.mark(lx - ch * 0.03, ly - sh * 0.03, bz + zT, size * 1.1, size * 0.64, tail);
       }
-      if (v.brake && dist < 180) {
-        const q2 = Render.point(lx, ly, bz + zT);
-        if (!q2) continue;
-        const r = Math.max(size, 3) * 2.8;
-        const gr = ctx.createRadialGradient(q2.x, q2.y, 0, q2.x, q2.y, r);
-        gr.addColorStop(0, '#ff4a30aa'); gr.addColorStop(1, '#ff4a3000');
-        ctx.fillStyle = gr; ctx.fillRect(q2.x - r, q2.y - r, r * 2, r * 2);
-      }
+      if (v.brake && dist < 180) Render.glow(lx - ch * 0.05, ly - sh * 0.05, bz + zT, Math.max(size, 3 * px) * 2.8, '#ff4a30', '#ff4a3055', 0.66);
     }
     // 방향지시등
     if (v.blink && facing < 0 && (Math.floor((sc.time + v.blinkPhase) * 1.6) & 1)) {
       const side = v.blink * (corr.dir > 0 ? 1 : -1);
       const lx = rearX - sh * p.wid * 0.5 * side, ly = rearY + ch * p.wid * 0.5 * side;
-      const q = Render.point(lx, ly, bz + zT);
-      if (q) { ctx.fillStyle = '#ffa825'; ctx.fillRect(q.x - size * 0.5, q.y - size * 0.3, size, size * 0.6); }
+      Render.mark(lx - ch * 0.03, ly - sh * 0.03, bz + zT, size, size * 0.6, '#ffa825');
     }
     // 전조등 — 우리를 향한 차만
     if (night && facing > 0) {
-      const fx = bx, fy = by;
       for (const side of [-1, 1]) {
-        const lx = fx - sh * hw * side, ly = fy + ch * hw * side;
-        const q = Render.point(lx, ly, bz + zT * 0.9);
-        if (!q) continue;
-        const r = clamp(200 / dist, 1.5, 26);
-        const gr = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
-        gr.addColorStop(0, '#fffbe8'); gr.addColorStop(0.3, '#ffeeb055'); gr.addColorStop(1, '#ffeeb000');
-        ctx.fillStyle = gr; ctx.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+        const lx = bx - sh * hw * side + ch * 0.05, ly = by + ch * hw * side + sh * 0.05;
+        Render.glow(lx, ly, bz + zT * 0.9, clamp(200 / dist, 1.5, 26) * px, '#fffbe8', '#ffeeb055', 1);
       }
     }
+    Render.layer = 0;
   },
 
   /* ---------- 화면 위 효과 ---------- */

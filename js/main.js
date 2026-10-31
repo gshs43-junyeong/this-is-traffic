@@ -41,7 +41,23 @@ const App = {
 
   init() {
     this.cv = document.getElementById('view');
-    this.ctx = this.cv.getContext('2d', { alpha: false });
+    /* 3D 는 WebGL(깊이 버퍼)로 그린다. 하늘·원경은 아래 2D 캔버스, 비·보닛 같은 효과는 위 2D 캔버스.
+       WebGL 을 못 쓰는 기기는 예전처럼 한 장의 캔버스 2D 로 그린다. ?gl=0 으로 강제할 수 있다. */
+    this.skyCv = document.getElementById('sky');
+    this.glCv = document.getElementById('gl');
+    const wantGL = !/[?&]gl=0/.test(location.search);
+    if (wantGL && Render.initGL(this.glCv)) {
+      document.body.classList.add('gl');
+      this.skyCtx = this.skyCv.getContext('2d', { alpha: false });
+      this.ctx = this.cv.getContext('2d', { alpha: true });
+      Render.onLost = () => {           // 문맥을 잃으면 캔버스 2D 로 계속 달린다
+        document.body.classList.remove('gl');
+        this.skyCtx = null;
+        UI.toast && UI.toast('그래픽 가속을 잃어 기본 렌더로 전환했습니다', 4);
+      };
+    } else {
+      this.ctx = this.cv.getContext('2d', { alpha: false });
+    }
     this.mapCv = document.getElementById('mapCv');
     UI.init(this);
     this.bindInput();
@@ -58,6 +74,7 @@ const App = {
     const w = this.cv.clientWidth, h = this.cv.clientHeight;
     this.cv.width = Math.max(320, Math.round(w * dpr));
     this.cv.height = Math.max(240, Math.round(h * dpr));
+    for (const c of [this.skyCv, this.glCv]) if (c) { c.width = this.cv.width; c.height = this.cv.height; }
     this.W = this.cv.width; this.H = this.cv.height;
     // 화면이 크면 묘사 거리를 줄여 프레임을 지킨다
     this.qBase = this.W > 1900 ? 0.82 : 1;
@@ -484,6 +501,7 @@ const App = {
       timeOfDay: this.cfg.timeOfDay, weather: this.cfg.weather,
       inTunnel, time: this.simTime, sunAz: 0.9,
       hidePlayer: this.cfg.view === 'cockpit',
+      skyCtx: this.skyCtx,
     });
     if (this.cfg.view === 'cockpit') this.dashboard();
   },

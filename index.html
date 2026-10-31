@@ -14,7 +14,12 @@ html,body{height:100%;background:#000;overflow:hidden}
 body{font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",-apple-system,system-ui,sans-serif;
   color:var(--ink);user-select:none;-webkit-font-smoothing:antialiased}
 #app{position:fixed;inset:0}
-#view{position:absolute;inset:0;width:100%;height:100%;background:#0b0d12;display:block}
+#view,#sky,#gl{position:absolute;inset:0;width:100%;height:100%;display:block}
+#view{background:#0b0d12}
+body.gl #view{background:transparent}
+#sky,#gl{display:none}
+body.gl #sky,body.gl #gl{display:block}
+#sky{background:#0b0d12}
 
 /* ================= HUD ================= */
 #hud{position:absolute;inset:0;pointer-events:none;font-size:13px}
@@ -123,6 +128,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 </head>
 <body>
 <div id="app">
+  <canvas id="sky"></canvas>
+  <canvas id="gl"></canvas>
   <canvas id="view"></canvas>
 
   <div id="hud">
