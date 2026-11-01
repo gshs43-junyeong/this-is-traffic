@@ -112,6 +112,7 @@ class Vehicle {
     this.obstacle = false; this.isPlayer = false; this.brake = 0; this.alive = true;
     this.phantomTargetV = 0; this.phantomUntil = 0;
     this.mem = 1; this.vAdj = Infinity;
+    this.lcFrom = 0; this.lcTo = 0; this.lcT = 0; this.lcDur = 0; this.ghostLead = null; this.ghostStamp = -1;
     this.dz = 0; this.rampT = 0;
     this.hn = 0; this.hs.fill(0); this.hv.fill(0);
     this.missed = false; this.onRamp = null; this.rs = 0;
@@ -178,6 +179,7 @@ class Corridor {
     this.entered = 0;
     this.stepId = 0;
     this.incidents = [];
+    this.ghosts = [];          // 차로를 바꾸는 중이라 아직 원래 차로를 물고 있는 차
     this.incidentTimer = this.rng.exp(3600 / Math.max(cfg.incidentRate, 1e-6));
     this.stat = {
       exited: 0, vehSec: 0, delaySec: 0, distM: 0,
@@ -421,6 +423,7 @@ class Corridor {
     }
     // 2) 협조 양보 표시 — 강제 합류 중인 차 뒤에 자리를 내주게 한다
     this.markYields();
+    this.markGhosts();
     // 3) 가속도 계산
     for (let li = 0; li < this.lanes.length; li++) {
       const arr = this.lanes[li];
@@ -508,6 +511,14 @@ class Corridor {
         if (a2 < acc) acc = a2;
       }
     }
+    // 옆 차로에서 넘어오며 이 차로를 물고 있는 차 — 실제 앞차처럼 대한다
+    if (v.ghostStamp === this.stepId && v.ghostLead) {
+      const gl = v.ghostLead, gg = gl.s - gl.len - v.s;
+      if (gg > -gl.len) {
+        const aG = idmAccel(v.v, v0, Math.max(gg, 0.3), v.v - gl.v, aMax, T * 0.8, s0, v.sqrtAB);
+        if (aG < acc) acc = aG < -6 ? -6 : aG;
+      }
+    }
     // 협조 양보 — 합류차를 부드럽게 선행차로 취급한다 (급제동은 하지 않는다)
     if (v.yieldStamp === this.stepId && v.yieldTo) {
       const m = v.yieldTo;
@@ -560,6 +571,21 @@ class Corridor {
     // 바짝 붙은 상태에서는 잡음이 가속 쪽으로 밀지 못하게 한다 (추종 중 추돌 방지)
     acc += (v.eta > 0 && gapNow < 2 * s0) ? 0 : v.eta;
     return clamp(acc, -9.5, 4.0);
+  }
+
+  /** 원래 차로를 아직 물고 있는 차를 그 차로 뒤차의 앞차로 걸어 둔다 (선을 문 차를 뚫고 지나가지 않게) */
+  markGhosts() {
+    const G = this.ghosts;
+    for (let i = G.length - 1; i >= 0; i--) {
+      const g = G[i], v = g.v;
+      if (!v.alive || v.lcDur <= 0 || v.lcT > 0.6 * v.lcDur || v.lane === g.lane) { G[i] = G[G.length - 1]; G.pop(); continue; }
+      const arr = this.lanes[g.lane];
+      if (!arr) continue;
+      const f = arr[this.seek(arr, v.s - 0.01) - 1];
+      if (!f || f.obstacle) continue;
+      if (f.ghostStamp === this.stepId && f.ghostLead && f.ghostLead.s < v.s) continue;   // 더 가까운 쪽을 남긴다
+      f.ghostLead = v; f.ghostStamp = this.stepId;
+    }
   }
 
   /** 옆 주행차로 바로 앞 차의 속도 — 차로 간 마찰의 기준 (부가차로는 보지 않는다) */
@@ -654,7 +680,15 @@ class Corridor {
     v.lcCool = Math.max(0, v.lcCool - dt);
     // 횡방향 — 차로 중심으로 부드럽게 이동
     const uPrev = v.u;
-    v.u += (v.uT - v.u) * U_LERP;      // 차로 중심으로 지수 접근 (tau = 0.62 s)
+    if (v.lcDur > 0) {
+      // 차로 변경 — 정해진 시간 동안 S 자로 옮겨 간다 (처음과 끝은 천천히, 가운데서 선을 문다)
+      v.lcT += dt;
+      const x = v.lcT >= v.lcDur ? 1 : v.lcT / v.lcDur;
+      v.u = v.lcFrom + (v.uT - v.lcFrom) * x * x * (3 - 2 * x);
+      if (x >= 1) v.lcDur = 0;
+    } else {
+      v.u += (v.uT - v.u) * U_LERP;      // 차로 중심으로 지수 접근 (tau = 0.62 s) — 램프·작은 보정
+    }
     v.yawRel = v.v > 1 ? Math.atan2((v.u - uPrev) / dt, v.v) : 0;
     if (v.pendingLane >= 0) v.signalT = Math.max(0, v.signalT - dt);
     if (v.pendingLane < 0 && Math.abs(v.u - v.uT) < 0.06) v.blink = 0;
@@ -670,7 +704,7 @@ class Corridor {
       const k = this.seek(arr, v.s);
       const lead = arr[k] || null, foll = arr[k - 1] || null;
       if ((!lead || lead.s - v.s - lead.len > 1.5) && (!foll || v.s - foll.s - v.len > 1.5)) {
-        this.doLaneChange(v, tl); v.stuck = 0; return;
+        this.doLaneChange(v, tl, 1); v.stuck = 0; return;
       }
     }
     if (v.lcCool > 0) return;
@@ -762,7 +796,7 @@ class Corridor {
       v.blink = bestLane > cur ? 1 : -1;
       return;
     }
-    if (v.signalT <= 0) this.doLaneChange(v, bestLane);
+    if (v.signalT <= 0) this.doLaneChange(v, bestLane, mand.dir === (bestLane > cur ? 1 : -1) ? mand.urg : 0);
   }
 
   /** MOBIL 내부용 간이 IDM (잡음·동력한계 제외) */
@@ -813,8 +847,16 @@ class Corridor {
     return { dir, urg };
   }
 
-  doLaneChange(v, tl) {
+  /* ★ 차로 변경은 순간이동이 아니다. 실측 평균 약 4.6 s (Toledo & Zohar 2007, TRR 1999)라
+     차마다 2.8~7 s 에 걸쳐 S 자로 옮기고(중차량은 길게, 급한 합류는 짧게), 앞쪽 60 % 동안은
+     원래 차로를 물고 있는 차로 남겨 그 차로의 뒤차도 이 차를 앞차로 본다(markGhosts).
+     예전에는 0.62 s 시정수로 바로 붙어 다른 차들이 '휙' 옮겨 다녔다. */
+  doLaneChange(v, tl, urg) {
     const fromLane = v.lane;
+    let dur = clamp(this.rng.normal(4.6, 0.9), 2.8, 7.0) * (v.p.heavy ? 1.2 : 1);
+    if (urg > 0.6) dur *= 0.65;
+    v.lcFrom = v.u; v.lcT = 0; v.lcDur = dur;
+    this.ghosts.push({ v, lane: fromLane });
     const from = this.lanes[v.lane];
     const k = from.indexOf(v);
     if (k >= 0) from.splice(k, 1);
@@ -823,7 +865,7 @@ class Corridor {
     arr.splice(this.seek(arr, v.s), 0, v);
     v.uT = this.laneU(tl);
     v.relax = 1;
-    v.lcCool = 1.6;
+    v.lcCool = Math.max(1.6, (v.lcDur || 0) + 0.8);   // 옮겨 가는 도중에 또 바꾸지 않는다
     v.pendingLane = -1; v.signalT = 0;
     v.blink = tl > fromLane ? 1 : -1;
     v.laneT = tl;

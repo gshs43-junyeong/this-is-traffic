@@ -28,6 +28,7 @@ const CFG_DEFAULT = {
   density: 50,         // 산 밀도 0~100
   ruggedness: 50,      // 험준도(사면이 날선 정도) 0~100
   tunnelSep: 26,       // 쌍굴 이격 (m)
+  bridgeShare: -10,    // 구조물 중 교량 비율 % (음수 = 지형대로)
   view: 'cockpit',     // cockpit | chase | high
 };
 
@@ -108,6 +109,7 @@ const App = {
       seed: c.seed | 0, length: c.length,
       terrain: { relief: c.relief, density: c.density, ruggedness: c.ruggedness },
       tunnelSep: c.tunnelSep, icSpacing: c.icSpacing,
+      bridgeShare: c.bridgeShare >= 0 ? c.bridgeShare / 100 : null,
     });
     this.corrA = new Corridor(this.road, 1, c, (c.seed | 0) * 7 + 1);
     this.corrB = c.twoWay ? new Corridor(this.road, -1, c, (c.seed | 0) * 7 + 2) : null;
@@ -136,7 +138,9 @@ const App = {
     let minR = Infinity;
     for (let i = 0; i < r.n; i++) { const k = Math.abs(r.K[i]); if (k > 1e-7 && 1 / k < minR) minR = 1 / k; }
     let mg = 0; for (let i = 0; i < r.n; i++) mg = Math.max(mg, Math.abs(r.grade[i]));
-    return `노선 생성 — ${fmt1(r.len / 1000)}km · ${this.cfg.lanes}차로 · 교량 ${br} · 터널 ${tu} · IC ${r.ics.length}` +
+    let lb = 0, lt = 0; for (const st of r.structs) if (st.type === 'bridge') lb += st.len; else lt += st.len;
+    const ratio = lb + lt > 0 ? ` (길이 ${Math.round(100 * lb / (lb + lt))}:${Math.round(100 * lt / (lb + lt))})` : '';
+    return `노선 생성 — ${fmt1(r.len / 1000)}km · ${this.cfg.lanes}차로 · 교량 ${br} · 터널 ${tu}${ratio} · IC ${r.ics.length}` +
       ` · 최소반경 ${isFinite(minR) ? fmt0(minR) + 'm' : '직선'} · 최대경사 ${fmt1(mg * 100)}%`;
   },
   warm(sec) {
@@ -400,7 +404,11 @@ const App = {
 
   /* ---------- 카메라 ---------- */
   updateCam(dt) {
-    const p = this.player, c = this.corrA, rd = this.road, view = this.cfg.view;
+    const p = this.player, c = this.corrA, rd = this.road;
+    /* 상공 시점도 굴 안에서는 추적 시점 높이로 내려온다 — 굴 천장 높이에서 아래를 내려다보면
+       굴 벽과 산 옆면만 화면을 채웠다. 다시 밖으로 나오면 같은 스프링으로 부드럽게 올라간다. */
+    const inTun = c.structA && (c.structA[c.jOf(p.s)] === 2 || c.structA[c.jOf(Math.max(0, p.s - 30))] === 2);
+    const view = this.cfg.view === 'high' && inTun ? 'chase' : this.cfg.view;
     const back = (view === 'cockpit' ? 0.35 : view === 'chase' ? 8.2 : 30) + (this.surge || 0);
     const up = view === 'cockpit' ? 1.22 : view === 'chase' ? 2.3 : 16;
     const sC = p.s - back;
@@ -409,7 +417,13 @@ const App = {
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
     const tx = g.x + nx * u * (view === 'high' ? 0.5 : 1);
     const ty = g.y + ny * u * (view === 'high' ? 0.5 : 1);
-    const tz = g.z + rd.crossZ(g, u) + up;
+    let tz = g.z + rd.crossZ(g, u) + up;
+    /* 상공·추적 시점 카메라가 산속에 묻히지 않게 한다. 굴 안이면 천장 아래로, 땅 위면 지면 위로.
+       ★ 그대로 두면 터널 출구 근처에서 카메라가 산 안에 들어가 화면이 지형 면으로 뒤덮였다. */
+    if (view !== 'cockpit') {
+      if (c.structA && c.structA[c.jOf(sC)] === 2) tz = Math.min(tz, g.z + RoadStd.tunnelH - 1.4);
+      else tz = Math.max(tz, Math.max(rd.terrain(tx, ty), rd.waterZ) + 2.5);
+    }
     // 조향한 쪽을 조금 먼저 본다 — 굽이를 미리 읽게 되어 조작이 붙는다
     const look = (view === 'cockpit' ? 0.85 : 0.35) * p.eps + (view === 'high' ? 0 : 0.10 * (p.steer || 0));
     const yawT = g.hdg + (c.dir > 0 ? 0 : Math.PI) + look;

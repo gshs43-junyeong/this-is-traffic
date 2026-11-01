@@ -73,6 +73,7 @@ const UI = {
       case 'seed': return '#' + v;
       case 'relief': case 'density': case 'ruggedness': return fmt0(v);
       case 'tunnelSep': return fmt0(v) + ' m';
+      case 'bridgeShare': return v < 0 ? '지형대로' : `교량 ${v} : 터널 ${100 - v}`;
       case 'icSpacing': return fmt1(v / 1000) + ' km 간격';
       default: return '' + v;
     }

@@ -18,6 +18,7 @@ const SKY = {
 
 // 본선 형상과 램프의 실제 접속 범위만 그린다.
 const RAMP_VISUAL_EXTENSION = 0;
+const RAMP_SH_IN = 1.0;     // 램프 안쪽 길어깨 (바깥 1.6 m) — 본선과 같은 형태: 차로 + 양쪽 길어깨 + 양쪽 가장자리선
 
 const Render = {
   ctx: null, W: 0, H: 0,
@@ -345,6 +346,17 @@ const Scene = {
     const j = seed != null ? 0.96 + ihash(seed) * 0.08 : 1;
     this.quad(a, b, c, d, this.haze(shade(base, f * j * this.pal.amb + (1 - this.pal.amb) * 0.5), dist));
   },
+  /** 도로에서 먼 지형 띠 (u0 부터 바깥으로 300 m). ★ 예전에는 90 m 에서 지형이 끝나 그 너머가
+      안개색 빈 땅으로 보였고, 원경 산 실루엣과 사이가 뚝 끊겨 보였다. 가까운 곳만 두 칸으로 나눈다. */
+  farBand(a, b, u0a, u0b, side, dist, seed) {
+    const G = this.pal.grass;
+    const cuts = dist < 400 ? [0, 110, 300] : [0, 300];
+    for (let k = 0; k < cuts.length - 1; k++) {
+      const p0 = cuts[k] * side, p1 = cuts[k + 1] * side;
+      this.groundQuad(this.ptZ(a, u0a + p0, this.terrAt(a, u0a + p0)), this.ptZ(b, u0b + p0, this.terrAt(b, u0b + p0)),
+        this.ptZ(b, u0b + p1, this.terrAt(b, u0b + p1)), this.ptZ(a, u0a + p1, this.terrAt(a, u0a + p1)), G, dist, seed + k * 3);
+    }
+  },
   /** 본선과 램프가 같은 아스팔트 색을 쓰게 한다 (3 m 칸마다 아주 조금 다른 명도) */
   roadTone(sRoad, dist) {
     const mot = dist < 260 ? 0.94 + ihash(Math.floor(sRoad / 3)) * 0.12 : 1;
@@ -485,8 +497,13 @@ const Scene = {
         const side = corr.dir > 0 ? 1 : -1;
         const edge = side * (m + outU);
         const [foot, footZ] = this.rampFoot(s, edge, g.z + rd.crossZ(g, edge) + corr.rampDz(tc), side);
-        if (corr.dir > 0) s.rampR = { in: Math.max(m + inU, s.aSh + 0.8), out: edge, foot, footZ };
-        else s.rampL = { in: Math.min(-(m + inU), s.bSh - 0.8), out: edge, foot, footZ };
+        /* 사이 땅의 바깥 끝 = 램프 안쪽 길어깨 끝. 높이도 램프 노면과 똑같이 잰다.
+           ★ 본선 높이로 평평하게 깔면 본선보다 낮아지는 램프를 덮어(WebGL 깊이 판정)
+           램프가 군데군데 땅에 묻혀 끊겨 보였다. */
+        const inPos = corr.dir > 0 ? Math.max(m + inU - RAMP_SH_IN, s.aSh + 0.8) : Math.min(-(m + inU - RAMP_SH_IN), s.bSh - 0.8);
+        const inZ = g.z + rd.crossZ(g, inPos) + corr.rampDz(tc);
+        if (corr.dir > 0) s.rampR = { in: inPos, inZ, out: edge, foot, footZ };
+        else s.rampL = { in: inPos, inZ, out: edge, foot, footZ };
       }
     }
     return s;
@@ -675,16 +692,18 @@ const Scene = {
         const aI2 = this.ptZ(a, a.bSh, this.terrAt(a, a.bSh)), bI2 = this.ptZ(b, b.bSh, this.terrAt(b, b.bSh));
         const aO2 = this.ptZ(a, a.bSh - 120, this.terrAt(a, a.bSh - 120)), bO2 = this.ptZ(b, b.bSh - 120, this.terrAt(b, b.bSh - 120));
         this.groundQuad(aI2, bI2, bO2, aO2, G, dist, sd + 2);
+        this.farBand(a, b, a.aSh + 120, b.aSh + 120, 1, dist, sd + 7);
+        this.farBand(a, b, a.bSh - 120, b.bSh - 120, -1, dist, sd + 8);
       } else {
         // 비탈면 + 그 바깥 지형
         // 비탈면은 6 m 넘게 깎아낸 자리만 암반색으로 두고, 나머지는 초지로 덮는다
         const slopeCol = (dz) => dz > 6 ? mixHex(pal.grass, pal.rock, clamp((dz - 6) / 12, 0, 0.85)) : pal.grass;
         // 오른쪽 — 램프가 있으면 램프 안쪽 경계에서 멈춘다
         const rInA = a.rampR ? a.rampR.in : null, rInB = b.rampR ? b.rampR.in : null;
-        const dRa = rInA != null ? Math.min(a.dayR, rInA) - 0.2 : a.dayR;
-        const dRb = rInB != null ? Math.min(b.dayR, rInB) - 0.2 : b.dayR;
-        const zRa = rInA != null && dRa < a.dayR ? a.g.z : a.dayRz;
-        const zRb = rInB != null && dRb < b.dayR ? b.g.z : b.dayRz;
+        // 램프가 있으면 본선 갓길에서 램프 안쪽 길어깨까지 한 면으로 잇는다 (IC 사이 정지면).
+        // 비탈 끝이 램프보다 가까우면 그 사이가 비어 하늘이 비쳤다.
+        const dRa = rInA != null ? rInA : a.dayR, dRb = rInB != null ? rInB : b.dayR;
+        const zRa = rInA != null ? a.rampR.inZ : a.dayRz, zRb = rInB != null ? b.rampR.inZ : b.dayRz;
         if (dRa > a.aSh + 0.2 || dRb > b.aSh + 0.2) {
           this.groundQuad(this.pt(a, a.aSh, 0), this.pt(b, b.aSh, 0),
             this.ptZ(b, dRb, zRb), this.ptZ(a, dRa, zRa), slopeCol(a.dayRz - a.g.z), dist, sd + 3);
@@ -693,9 +712,11 @@ const Scene = {
           this.groundQuad(this.ptZ(a, a.dayR, a.dayRz), this.ptZ(b, b.dayR, b.dayRz),
             this.ptZ(b, b.dayR + 90, this.terrAt(b, b.dayR + 90)),
             this.ptZ(a, a.dayR + 90, this.terrAt(a, a.dayR + 90)), G, dist, sd + 5);
+          this.farBand(a, b, a.dayR + 90, b.dayR + 90, 1, dist, sd + 7);
         } else {
           // 경계가 없는 쪽은 본선 비탈끝을 써서 램프 시작·끝의 지형을 삼각형으로 잇는다.
           const oA = a.rampR ? a.rampR.foot : a.dayR, oB = b.rampR ? b.rampR.foot : b.dayR;
+          this.farBand(a, b, oA + 150, oB + 150, 1, dist, sd + 7);
           for (const [w0, w1] of [[0, 40], [40, 150]]) {
             this.groundQuad(this.ptZ(a, oA + w0, this.terrAt(a, oA + w0)), this.ptZ(b, oB + w0, this.terrAt(b, oB + w0)),
               this.ptZ(b, oB + w1, this.terrAt(b, oB + w1)), this.ptZ(a, oA + w1, this.terrAt(a, oA + w1)), G, dist, sd + 5 + w0);
@@ -704,10 +725,8 @@ const Scene = {
 
         // 왼쪽 — 반대편 차도의 램프도 같은 방식으로
         const lInA = a.rampL ? a.rampL.in : null, lInB = b.rampL ? b.rampL.in : null;
-        const dLa = lInA != null ? Math.max(a.dayL, lInA) + 0.2 : a.dayL;
-        const dLb = lInB != null ? Math.max(b.dayL, lInB) + 0.2 : b.dayL;
-        const zLa = lInA != null && dLa > a.dayL ? a.g.z : a.dayLz;
-        const zLb = lInB != null && dLb > b.dayL ? b.g.z : b.dayLz;
+        const dLa = lInA != null ? lInA : a.dayL, dLb = lInB != null ? lInB : b.dayL;
+        const zLa = lInA != null ? a.rampL.inZ : a.dayLz, zLb = lInB != null ? b.rampL.inZ : b.dayLz;
         if (dLa < a.bSh - 0.2 || dLb < b.bSh - 0.2) {
           this.groundQuad(this.pt(a, a.bSh, 0), this.pt(b, b.bSh, 0),
             this.ptZ(b, dLb, zLb), this.ptZ(a, dLa, zLa), slopeCol(a.dayLz - a.g.z), dist, sd + 4);
@@ -716,8 +735,10 @@ const Scene = {
           this.groundQuad(this.ptZ(a, a.dayL, a.dayLz), this.ptZ(b, b.dayL, b.dayLz),
             this.ptZ(b, b.dayL - 90, this.terrAt(b, b.dayL - 90)),
             this.ptZ(a, a.dayL - 90, this.terrAt(a, a.dayL - 90)), G, dist, sd + 6);
+          this.farBand(a, b, a.dayL - 90, b.dayL - 90, -1, dist, sd + 8);
         } else {
           const oA = a.rampL ? a.rampL.foot : a.dayL, oB = b.rampL ? b.rampL.foot : b.dayL;
+          this.farBand(a, b, oA - 150, oB - 150, -1, dist, sd + 8);
           for (const [w0, w1] of [[0, 40], [40, 150]]) {
             this.groundQuad(this.ptZ(a, oA - w0, this.terrAt(a, oA - w0)), this.ptZ(b, oB - w0, this.terrAt(b, oB - w0)),
               this.ptZ(b, oB - w1, this.terrAt(b, oB - w1)), this.ptZ(a, oA - w1, this.terrAt(a, oA - w1)), G, dist, sd + 6 + w0);
@@ -822,6 +843,11 @@ const Scene = {
       this.quad(P(a, Math.min(inA, outA), t0), P(b, Math.min(inB, outB), t1), P(b, outB, t1), P(a, outA, t0), road);
     }
     this.quad(P(a, outA, t0), P(b, outB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), shoulder);
+    // 안쪽 길어깨 — 본선 가장자리 밖에서만
+    const siA = Math.max(inA - RAMP_SH_IN, eA), siB = Math.max(inB - RAMP_SH_IN, eB);
+    if (inA - siA > 0.05 || inB - siB > 0.05) {
+      this.quad(P(a, siA, t0), P(b, siB, t1), P(b, Math.max(inB, siB), t1), P(a, Math.max(inA, siA), t0), shoulder);
+    }
     Render.layer = 2;
     if (dist < 520) {
       // 바깥 가장자리선

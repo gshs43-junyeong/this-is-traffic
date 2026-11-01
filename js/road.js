@@ -153,15 +153,17 @@ class Road {
     this.P = roadParamsFor(this.tcfg);          // 지형에서 유도한 설계 상수
     this.tunnelSep = opt.tunnelSep != null ? opt.tunnelSep : 26;  // 쌍굴 이격 (m)
     this.icSpacing = opt.icSpacing != null ? opt.icSpacing : 6000; // 인터체인지 평균 간격 (m)
+    // 구조물 중 교량이 차지할 길이 비율 0~1 (null 이면 지형대로)
+    this.bridgeShare = opt.bridgeShare != null && opt.bridgeShare >= 0 ? clamp(opt.bridgeShare, 0, 1) : null;
     this.terrain = makeTerrain(this.seed, this.tcfg);
 
     this._horizontal();
     this._vertical();
     this._superelevation();
     this._structures();
+    this._interchanges();             // IC 자리의 작은 구조물을 걷어 내므로 이격·비탈보다 먼저
     this._separation();
     this._daylight();
-    this._interchanges();
     this._water();
   }
 
@@ -399,22 +401,53 @@ class Road {
   }
 
   /* ======================= 구조물 판정 ======================= */
+  /* 교량:터널 비율. 문턱을 서로 반대로 움직이는 값 x 를 이분법으로 찾아 목표 비율에 맞춘다.
+     x > 0 이면 교량 문턱이 낮아지고(얕은 골도 건넌다) 터널 문턱이 높아진다(얕은 산은 깎는다).
+     ★ 터널 문턱은 9 m 아래로 내리지 않는다 — 굴 높이 7.9 m 위에 덮개가 남아야 산에 뚫린 굴로 보인다.
+     0 이나 1 은 한쪽을 아예 끈다 (그 자리는 높은 성토·깊은 절토로 남는다). */
   _structures() {
     const n = this.n, ds = this.ds;
     const fill = new Float32Array(n);
     for (let i = 0; i < n; i++) fill[i] = this.z[i] - this.zt[i];
     this.fill = fill;
+    const P0 = this.P, b = this.bridgeShare;
+    const run = (x) => {
+      const kB = Math.exp(-1.1 * x), kT = Math.exp(1.1 * x);
+      this.P = Object.assign({}, P0, {
+        brgFill: b === 0 ? 1e9 : Math.max(6, P0.brgFill * kB), brgRun: P0.brgRun * Math.sqrt(kB),
+        tunCut: b === 1 ? 1e9 : Math.max(9, P0.tunCut * kT), tunRun: P0.tunRun * Math.sqrt(kT),
+      });
+      this._structuresAt(fill);
+      let lb = 0, lt = 0;
+      for (const st of this.structs) if (st.type === 'bridge') lb += st.len; else lt += st.len;
+      return lb + lt > 0 ? lb / (lb + lt) : 0.5;
+    };
+    if (b == null || b === 0 || b === 1) run(0);
+    else {
+      let lo = -1.6, hi = 1.6;
+      for (let it = 0; it < 14; it++) {
+        const mid = (lo + hi) / 2;
+        if (run(mid) < b) lo = mid; else hi = mid;
+      }
+      run((lo + hi) / 2);
+    }
+    this.P = P0;
+  }
+  _structuresAt(fill) {
+    const n = this.n, ds = this.ds;
 
     const flag = new Uint8Array(n);   // 0 토공 / 1 교량 / 2 터널
     const runs = [];
 
-    const scan = (test, expand, minLen, code) => {
+    const scan = (test, expand, minLen, code, deep) => {
       let i = 0;
       while (i < n) {
         if (!test(fill[i])) { i++; continue; }
-        let a = i, b = i;
+        let a = i, b = i, peak = 0;
         while (b + 1 < n && test(fill[b + 1])) b++;
-        if ((b - a) * ds >= minLen) {
+        for (let k = a; k <= b; k++) peak = Math.max(peak, Math.abs(fill[k]));
+        // 짧아도 깊으면 구조물이다 — 좁고 깊은 골을 50 m 넘는 흙둑으로 메우지 않는다
+        if ((b - a) * ds >= minLen || peak > deep) {
           while (a > 0 && expand(fill[a - 1])) a--;
           while (b < n - 1 && expand(fill[b + 1])) b++;
           runs.push({ code, a, b });
@@ -424,23 +457,31 @@ class Road {
     };
     const P = this.P;
     // 교량: 성토고가 문턱을 넘는 구간이 충분히 길 때 / 터널: 절토고 기준
-    scan(f => f > P.brgFill, f => f > P.brgFill * 0.42, P.brgRun, 1);
-    scan(f => f < -P.tunCut, f => f < -P.tunCut * 0.44, P.tunRun, 2);
+    scan(f => f > P.brgFill, f => f > P.brgFill * 0.42, P.brgRun, 1, P.brgFill * 2.6);
+    scan(f => f < -P.tunCut, f => f < -P.tunCut * 0.44, P.tunRun, 2, P.tunCut * 2.6);
 
     runs.sort((p, q) => p.a - q.a);
     const kept = [];
     for (const r of runs) {
       const last = kept[kept.length - 1];
-      if (last && r.a <= last.b + Math.round(260 / ds)) {         // 너무 가까우면 병합/흡수
-        if (r.code === last.code) { last.b = Math.max(last.b, r.b); continue; }
-        if ((r.b - r.a) < (last.b - last.a)) continue;
-        kept.pop();
+      if (last && r.a <= last.b + Math.round(260 / ds)) {
+        if (r.code === last.code) { last.b = Math.max(last.b, r.b); continue; }   // 같은 종류는 하나로
+        /* ★ 종류가 다르면 둘 다 남기고 맞붙인다(산악 고속도로에 흔한 '교량 → 터널').
+           예전에는 짧은 쪽을 버려, 버려진 자리가 높이 100 m 넘는 성토·절토로 남아
+           지형이 크게 깨져 보였다. */
+        const a2 = Math.max(r.a, last.b + 1);
+        if (r.b - a2 < 4) continue;
+        kept.push({ ...r, a: a2 });
+        continue;
       }
       kept.push({ ...r });
     }
     this.structs = [];
     for (const r of kept) {
-      if ((r.b - r.a) * ds < 90) continue;              // 90 m 미만은 토공으로 처리
+      if ((r.b - r.a) * ds < 60) {                      // 짧은 구조물은 60 m 로 늘린다 (깊은 골 · 좁은 능선)
+        const pad = Math.ceil((60 / ds - (r.b - r.a)) / 2);
+        r.a = Math.max(0, r.a - pad); r.b = Math.min(n - 1, r.b + pad);
+      }
       for (let i = r.a; i <= r.b; i++) flag[i] = r.code;
       this.structs.push({
         type: r.code === 1 ? 'bridge' : 'tunnel',
@@ -572,21 +613,48 @@ class Road {
       // 구조물 밖, 경사·곡률이 완만한 자리를 근처에서 찾는다
       let bi = -1, bScore = Infinity;
       const j0 = Math.round(520 / ds), j1 = Math.round(1450 / ds);
-      for (let d = -1700; d <= 1700; d += 40) {
+      // 1차: 얕은 땅 · 짧은 구조물만. 산지라 못 찾으면 2차로 높은 성토·긴 구조물도 허용한다
+      for (const [fLim, sLim] of [[38, 450], [64, 1000]]) {
+      if (bi > 0) break;
+      /* 구조물이 촘촘한 산지에서는 ±1.7 km 안에 빈자리가 없어 IC 가 통째로 빠졌다.
+         간격의 60 % 까지 넓혀 찾고, 다음 IC 는 실제로 놓은 자리에서부터 잰다. */
+      const R = Math.max(1700, this.icSpacing * 0.6);
+      for (let d = -R; d <= R; d += 40) {
         const ss = s + d;
         if (ss < 1400 || ss > this.len - 1800) continue;
         const i = Math.round(ss / ds);
-        let bad = 0, blocked = false;
+        /* ★ 구조물이 하나라도 걸리면 버리던 때는 산지에서 IC 가 0~1 개뿐이었다.
+           이제는 계획고가 땅에 가까운(성·절토가 얕은) 자리를 고르고, 그 안의 구조물은 걷어 낸다.
+           깊은 골·높은 능선(38 m 넘게 메우거나 깎아야 하는 곳)과 긴 구조물(450 m 넘음)은 피한다. */
+        let bad = 0, blocked = false, deep = 0;
         for (let j = i - j0; j <= i + j1; j++) {
           const jj = clamp(j, 0, this.n - 1);
-          if (this.struct[jj]) { blocked = true; break; }
-          bad += Math.abs(this.grade[jj]) * 40 + Math.abs(this.K[jj]) * 900;
+          const f = Math.abs(this.fill[jj]);
+          if (f > fLim) { blocked = true; break; }
+          if (f > deep) deep = f;
+          bad += Math.abs(this.grade[jj]) * 40 + Math.abs(this.K[jj]) * 900 + f * 0.012;
+        }
+        if (!blocked) for (const st of this.structs) {
+          if (st.s1 > (i - j0) * ds && st.s0 < (i + j1) * ds && st.len > sLim) { blocked = true; break; }
         }
         if (blocked) continue;
-        const score = bad / (j0 + j1) + Math.abs(d) / 5000;
+        const score = bad / (j0 + j1) + Math.abs(d) / 3000;
+        if (this.ics.length && ss - this.ics[this.ics.length - 1].s < this.icSpacing * 0.45) continue;
         if (score < bScore) { bScore = score; bi = i; }
       }
+      }
       if (bi > 0) {
+        // IC 범위의 구조물을 걷어 낸다 (걸친 것은 잘라 내고, 60 m 가 안 남으면 지운다)
+        const w0 = (bi - j0) * ds - 40, w1 = (bi + j1) * ds + 40;
+        const keep = [];
+        for (const st of this.structs) {
+          if (st.s1 <= w0 || st.s0 >= w1) { keep.push(st); continue; }
+          for (const [a, b] of [[st.s0, Math.min(st.s1, w0)], [Math.max(st.s0, w1), st.s1]]) {
+            if (b - a >= 60) keep.push(Object.assign({}, st, { s0: a, s1: b, len: b - a }));
+          }
+        }
+        this.structs = keep;
+        for (let j = Math.max(0, Math.floor(w0 / ds)); j <= Math.min(this.n - 1, Math.ceil(w1 / ds)); j++) this.struct[j] = 0;
         const rest = rng.chance(0.28);
         this.ics.push({
           s: bi * ds,
@@ -594,7 +662,7 @@ class Road {
           rest,
         });
       }
-      s += this.icSpacing * rng.range(0.62, 1.42);   // 간격은 매번 임의로
+      s = (bi > 0 ? bi * ds : s) + this.icSpacing * rng.range(0.62, 1.42);   // 간격은 매번 임의로
     }
     // 이름 중복 제거
     const seen = new Set();

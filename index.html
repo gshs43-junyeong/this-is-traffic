@@ -317,6 +317,10 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
             <input type="range" min="12" max="46" step="2" data-cfg="tunnelSep" data-num="1">
             <div class="hint">터널에서 두 방향 차도를 벌리는 거리. 사이에 남는 암반이 중앙 필러가 된다.
               본선에서 이 거리까지는 완만한 테이퍼로 벌어졌다 다시 좁혀진다.</div></div>
+          <div class="fld"><label>교량 : 터널 비율 <span class="val"></span></label>
+            <input type="range" min="-10" max="100" step="10" data-cfg="bridgeShare" data-num="1">
+            <div class="hint">구조물 길이 중 교량이 차지하는 비율. 맨 왼쪽은 지형대로 정한다. 0 이면 교량 없이 골짜기를
+              높은 성토로, 100 이면 터널 없이 산을 깊게 깎아 지난다. 실제 비율은 노선 생성 알림에 나온다.</div></div>
         </div>
 
         <div class="sect">노선 <span style="color:#69728a;font-weight:400">— 재생성 필요</span></div>
