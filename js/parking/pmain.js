@@ -54,7 +54,7 @@ const PApp = {
     // 처음 온 사람에게 한 번 — 규모 · 차량 수는 설정에서
     try {
       if (!localStorage.getItem('parkHint')) {
-        setTimeout(() => this.toast('설정(P)에서 형식 · 가로 · 세로 · 층수와 들어오고 나가는 차량 수를 정할 수 있습니다', 6), 4500);
+        setTimeout(() => this.toast('설정(P)에서 형식 · 가로 · 세로 · 층수와 들어오고 나가는 차량 수를 정합니다 · 자동 관람(A)은 볼 만한 장면을 따라갑니다', 7), 4500);
         localStorage.setItem('parkHint', '1');
       }
     } catch (e) { /* 저장소가 막혀도 안내만 빠진다 */ }
