@@ -313,7 +313,7 @@ const PScene = {
         const w = PK.laneW / 2;
         const ax = ed.x[k], ay = ed.y[k], bx = ed.x[k + 1], by = ed.y[k + 1];
         const nax = -Math.sin(ha), nay = Math.cos(ha), nbx = -Math.sin(hb), nby = Math.cos(hb);
-        M.quad([ax - nax * w, ay - nay * w, za + 0.012], [bx - nbx * w, by - nby * w, zb + 0.012], [bx + nbx * w, by + nby * w, zb + 0.012], [ax + nax * w, ay + nay * w, za + 0.012], shade(PCOL.ramp, 0.98 + 0.04 * ((k >> 1) & 1)));
+        M.quad([ax - nax * w, ay - nay * w, za + 0.012], [bx - nbx * w, by - nby * w, zb + 0.012], [bx + nbx * w, by + nby * w, zb + 0.012], [ax + nax * w, ay + nay * w, za + 0.012], shade(PCOL.ramp, faceLit(0, -Math.sign(zb - za) * 0.15, 1, true) / faceLit(0, 0, 1, true)));
         M.quad([ax - nax * w, ay - nay * w, za - 0.3], [bx - nbx * w, by - nby * w, zb - 0.3], [bx + nbx * w, by + nby * w, zb - 0.3], [ax + nax * w, ay + nay * w, za - 0.3], PCOL.ceil);
         for (const sd of [-1, 1]) {      // 측벽 연석
           const pa = [ax + nax * w * sd, ay + nay * w * sd], pb = [bx + nbx * w * sd, by + nby * w * sd];
