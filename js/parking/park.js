@@ -281,6 +281,7 @@ class ParkSim {
     v.s += (v.v + nv) * 0.5 * dt;
     v.v = nv;
     if (v.v < 0.1) v.stopT += dt; else v.stopT = 0;
+    if (v.searching && v.inside && v.edge) v.edge.hunt = (v.edge.hunt || 0) + dt;   // 탐색 열지도
     // 간선 넘기기
     while (v.edge && v.s > v.edge.len) {
       const nx = v.route[v.ri + 1];

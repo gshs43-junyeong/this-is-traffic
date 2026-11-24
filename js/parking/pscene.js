@@ -537,6 +537,29 @@ const PScene = {
       }
       if (g.busy || g.full) Render.glow(bx, by, 1.32, 10, g.full ? '#ff3b30' : '#ffb340', '#ffb34055', 0.9);
     }
+    // 탐색 열지도 — 빈 자리를 찾는 차가 머문 시간 (보이는 맨 위층, 층 안 최댓값 기준)
+    if (opt.heat) {
+      const eds = G.edges.filter((e) => e.level === opt.cut && (e.kind === 'loop' || e.kind === 'aisle'));
+      let mx = 0; for (const e of eds) mx = Math.max(mx, (e.hunt || 0) / Math.max(10, e.len));
+      if (mx > 0) {
+        ctx.globalAlpha = 0.62; Render.layer = 2;
+        for (const e of eds) {
+          const f = (e.hunt || 0) / Math.max(10, e.len) / mx;
+          if (f < 0.02) continue;
+          const col = f < 0.5 ? mixHex('#2e9e5b', '#f9c825', f * 2) : mixHex('#f9c825', '#e2392c', (f - 0.5) * 2);
+          const k = Math.max(1, Math.round(1.5 / e.step)), w = 2.4;
+          for (let i = 0; i < e.n - 1; i += k) {
+            const j = Math.min(e.n - 1, i + k);
+            const na = [-Math.sin(e.h[i]) * w, Math.cos(e.h[i]) * w], nb = [-Math.sin(e.h[j]) * w, Math.cos(e.h[j]) * w];
+            Render.begin();
+            Render.add(e.x[i] - na[0], e.y[i] - na[1], e.z[i] + 0.04); Render.add(e.x[j] - nb[0], e.y[j] - nb[1], e.z[j] + 0.04);
+            Render.add(e.x[j] + nb[0], e.y[j] + nb[1], e.z[j] + 0.04); Render.add(e.x[i] + na[0], e.y[i] + na[1], e.z[i] + 0.04);
+            Render.fill(col);
+          }
+        }
+        ctx.globalAlpha = 1; Render.layer = 0;
+      }
+    }
     // 빈 면 표시등 (유도 시스템) — 보이는 맨 위층만
     if (opt.guide) {
       for (const s of G.stalls) {

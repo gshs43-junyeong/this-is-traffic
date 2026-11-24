@@ -88,7 +88,7 @@ const PApp = {
     }
     this.updateCam(raw);
     const t1 = performance.now();
-    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow', guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
+    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow', heat: this.heat, guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
     this.overlay();
     this.drawMs = (this.drawMs || 0) * 0.9 + (performance.now() - t1) * 0.1;
     this.hudT = (this.hudT || 0) + raw;
@@ -196,6 +196,7 @@ const PApp = {
       else if (k >= '1' && k <= '5') this.setSpeed([1, 2, 5, 10, 30][+k - 1]);
       else if (k === 't' || k === 'T') this.setMode(this.mode === 'top' ? 'orbit' : 'top');
       else if (k === 'f' || k === 'F') this.followRandom();
+      else if (k === 'h' || k === 'H') this.toggleHeat();
       else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { this.sel = null; this.setMode('orbit'); } }
       else if (k === 'p' || k === 'P') this.panel(!$('#panel').classList.contains('on'));
     });
@@ -242,6 +243,10 @@ const PApp = {
   },
   updMode() { for (const b of $$('[data-mode]')) b.classList.toggle('on', b.dataset.mode === this.mode); },
   setCut(c) { this.cut = clamp(c, 0, this.G.NL - 1); if (this.mode === 'follow') this.setMode('orbit'); this.hud(); },
+  toggleHeat() {
+    this.heat = !this.heat; $('#bHeat').classList.toggle('on', this.heat);
+    if (this.heat) this.toast('탐색 열지도 — 빈 자리를 찾는 차가 오래 머문 통로일수록 붉다 (보이는 층)', 3.5);
+  },
   setSpeed(s) { this.speed = s; for (const b of $$('[data-speed]')) b.classList.toggle('on', +b.dataset.speed === s); },
   togglePause() { this.paused = !this.paused; $('#bPause').textContent = this.paused ? '▶ 재생' : '⏸ 일시정지'; },
 
@@ -251,6 +256,7 @@ const PApp = {
     for (const b of $$('[data-speed]')) b.onclick = () => this.setSpeed(+b.dataset.speed);
     for (const b of $$('[data-mode]')) b.onclick = () => this.setMode(b.dataset.mode);
     $('#bUp').onclick = () => this.setCut(this.cut + 1);
+    $('#bHeat').onclick = () => this.toggleHeat();
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
     $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };
