@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1,
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp',
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -14,6 +14,7 @@ const PPRESETS = {
   mixed: { W: 64, D: 52, U: 4, B: 2, inRate: 220, outRate: 200, initOcc: 0.55, label: '복합' },
   rush: { W: 64, D: 52, U: 3, B: 2, inRate: 520, outRate: 60, initOcc: 0.7, label: '출근 몰림' },
   leave: { W: 64, D: 52, U: 3, B: 2, inRate: 40, outRate: 600, initOcc: 0.95, label: '퇴근 몰림' },
+  mech: { kind: 'mech', W: 40, D: 52, U: 12, B: 0, inRate: 120, outRate: 100, initOcc: 0.6, label: '기계식 주차타워' },
 };
 
 const PApp = {
@@ -49,8 +50,9 @@ const PApp = {
     const c = this.cfg;
     c.U = clamp(c.U | 0, 0, 20); c.B = clamp(c.B | 0, 0, 10);
     if (c.U + c.B < 1) c.U = 1;
-    this.G = buildGarage(c);
-    this.sim = new ParkSim(this.G, c);
+    const mech = c.kind === 'mech';
+    this.G = mech ? buildMech(c) : buildGarage(c);
+    this.sim = mech ? new MechSim(this.G, c) : new ParkSim(this.G, c);
     PScene.init(this.G, this.sim, this.night);
     // 따라가던 차가 주차를 마치면 내린 운전자를 따라 계단실까지 간다
     this.sim.onPed = (p) => { if (this.sel === p.car && !p.toCar && (this.mode === 'follow' || this.mode === 'driver')) { this.sel = p; if (this.mode === 'driver') this.setMode('follow'); } };
@@ -288,7 +290,7 @@ const PApp = {
     $('#bApply').onclick = () => { this.readPanel(true); this.panel(false); this.rebuild(); };
     for (const b of $$('[data-preset]')) b.onclick = () => {
       const p = PPRESETS[b.dataset.preset];
-      Object.assign(this.cfg, p); delete this.cfg.label;
+      Object.assign(this.cfg, { kind: 'ramp' }, p); delete this.cfg.label;
       this.fillPanel(); this.readPanel(true); this.panel(false); this.rebuild();
     };
     // 수요 · 운영 값은 다시 짓지 않고 바로 반영
@@ -297,6 +299,7 @@ const PApp = {
       el.addEventListener('input', () => { this.readPanel(false); this.live(); });
     }
     for (const id of ['guide', 'gate']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
+    $('#c_kind').addEventListener('change', () => this.est());
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
     this.setSpeed(1);
   },
@@ -359,6 +362,7 @@ const PApp = {
     $('#c_guide').checked = !!c.guide;
     $('#c_gate').value = c.gate;
     $('#c_lanes').value = String(c.lanes || 1);
+    $('#c_kind').value = c.kind || 'ramp';
     this.est();
   },
   readPanel(all) {
@@ -370,7 +374,7 @@ const PApp = {
       const o = $('#v_' + k); if (o) o.textContent = this.fields[k][0](v);
     }
     c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value;
-    if (all) c.lanes = +$('#c_lanes').value;
+    if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; }
     this.est();
     this.save();
   },
@@ -378,6 +382,11 @@ const PApp = {
   est() {
     const W = +$('#c_W').value, D = +$('#c_D').value, U = +$('#c_U').value, B = +$('#c_B').value;
     try {
+      if ($('#c_kind').value === 'mech') {
+        const g = buildMech({ W, D, U: Math.max(1, U), B, seed: 1 });
+        $('#estOut').textContent = `기계식 주차타워 ${g.towers.length}기 (가로 ${fmt1(g.W)} m) · 탑마다 ${g.NL}단 × 2칸 · 총 ${g.stalls.length}면 · 높이 약 ${fmt1(g.levels[g.NL - 1].z + MK.pitch + 0.7)} m — 세로는 쓰지 않는다`;
+        return;
+      }
       const g = buildGarage({ W, D, U, B, seed: 1 });
       $('#estOut').textContent = `${g.levels[0].name}~${g.levels[g.NL - 1].name} (${g.NL}개 층) · 주차면 ${g.stalls.length}면 · 층당 약 ${Math.round(g.stalls.length / Math.max(1, g.levels.filter((l) => l.park).length))}면 · 경사로 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %`;
     } catch (e) { $('#estOut').textContent = '배치 불가: ' + e.message; }
@@ -422,6 +431,7 @@ const PApp = {
     } else if (v && v.mode !== 'done') {
       box.style.display = 'block';
       const what = v.mode === 'parked' ? (v.leaving ? (v.driverAway ? '운전자가 차로 오는 중' : '출차 대기 (통로가 빌 때까지)') : '주차 중') :
+        v.mode === 'mech' ? (v.leaving ? '출고 중 (승강기 · 턴테이블)' : '입고 중 (승강기로 칸에 넣는 중)') :
         v.mode === 'man' ? ({ revIn: '후면주차 중 (후진)', fwdIn: '전면주차 중', outFwd: '출차 — 앞으로 빠짐', outRev: '출차 — 후진으로 빠짐' }[v.man.kind]) :
           v.role === 'thru' ? '통과 차량' : v.done ? '나가는 중' : !v.inside ? (v.balk ? '대기열이 길어 지나감' : '입구로') :
             v.leaving ? '출구로' : v.giveUp ? '못 찾고 나감' : v.plan ? (v.plan.how === 'rev' ? '후면주차 준비' : '전면주차 준비') :
@@ -460,7 +470,16 @@ const PApp = {
     // 층 이름표 — 경사로 칸 바깥 벽에
     ctx.font = `600 ${Math.round(12 * this.H / 900 + 6)}px system-ui,sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    if (this.mode !== 'follow' && this.mode !== 'driver') {
+    if (this.mode !== 'follow' && this.mode !== 'driver' && G.mech) {
+      for (const T of G.towers) {
+        const q = Render.point(T.x, -0.4, MK.ground + 0.6);
+        if (!q) continue;
+        const t = `${T.idx + 1}호기` + (T.q.length ? ` · 출고 대기 ${T.q.length}` : '');
+        const w = ctx.measureText(t).width + 10;
+        ctx.fillStyle = '#10141bcc'; ctx.fillRect(q.x - w / 2, q.y - 9, w, 18);
+        ctx.fillStyle = T.state === 'idle' ? '#7fe0a8' : '#ffd59f'; ctx.fillText(t, q.x, q.y);
+      }
+    } else if (this.mode !== 'follow' && this.mode !== 'driver') {
       {
         const L = G.levels[this.cut];
         const q = Render.point(PK.RW / 2, G.D - 1.2, L.z + 2.0);

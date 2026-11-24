@@ -186,7 +186,7 @@ const PScene = {
     }
     // 옥상 조명주 — 지상 맨 위층이 지붕 없는 주차장일 때
     const topL = G.levels[G.NL - 1];
-    if (!topL.under && topL.park) {
+    if (!G.mech && !topL.under && topL.park) {
       for (let x = PK.RW + 6; x < W - 2; x += 16) for (const y of [0.45, D - 0.45]) {
         A.box(x - 0.1, y - 0.1, topL.z, x + 0.1, y + 0.1, topL.z + 6, NX('#6b7076'), false, true);
         this.lamps.push([x, y + (y < 1 ? 0.6 : -0.6), topL.z + 5.9, G.NL - 1]);
@@ -202,7 +202,7 @@ const PScene = {
       A.quad([-t, -t, zb], [W + t, -t, zb], [W + t, D + t, zb], [-t, D + t, zb], '#3a3c3a');
     }
     // 계단 · 승강기 동 (전 층을 꿰는 탑) — 층마다 문은 그 층 묶음에
-    {
+    if (G.core) {
       const c = G.core, zb = G.levels[0].z - SL, zt = G.levels[G.NL - 1].z + (G.levels[G.NL - 1].under ? 0 : 3.4);
       A.box(c.x0, c.y0 + 0.02, zb, c.x1, c.y1, zt, '#c9c3b4', false, false);
       if (PNIGHT) for (let i = 0; i < G.NL; i++) if (!G.levels[i].under) A.quad([c.x0 + 1.2, c.y1 + 0.02, G.levels[i].z + 1.0], [c.x1 - 1.2, c.y1 + 0.02, G.levels[i].z + 1.0], [c.x1 - 1.2, c.y1 + 0.02, G.levels[i].z + 2.4], [c.x0 + 1.2, c.y1 + 0.02, G.levels[i].z + 2.4], '#efe3b6');
@@ -225,6 +225,8 @@ const PScene = {
         A.quad([fx, y0 - 0.05, fz], [fx + 1.4, y0 - 0.05, fz], [fx + 1.4, y0 - 0.05, fz + 1.3], [fx, y0 - 0.05, fz + 1.3], lit2 ? '#f0d28a' : NX('#5d6a78'));
       }
     }
+    if (G.mech) this.mechFrame(A);          // 기계식 주차타워 — 강철 골조 (mech.js)
+    else {
     /* --- 층 --- */
     for (let i = 0; i < G.NL; i++) {
       const L = G.levels[i], z = L.z, M = part(i);
@@ -362,6 +364,7 @@ const PScene = {
         if (Math.abs(q.y - G.yt) < 3.5 || Math.abs(q.y - G.yb) < 3.5) continue;
         this.arrow(part(this.lvAt(q.z)), q.x, q.y, q.z + 0.03, q.h);
       }
+    }
     }
     // 잇기
     const all = new MeshB();
@@ -552,6 +555,7 @@ const PScene = {
       this.lights(v, opt.time, dist);
       if (v === opt.sel && !opt.follow) this.selMark(v);
     }
+    if (G.mech) this.mechLifts(em);
     // 사람 — 차에서 내려 계단실로, 출차할 때는 계단실에서 차로
     for (const p of sim.peds) {
       if (p.delay > 0 || p.z > zCut - 0.6) continue;

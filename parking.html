@@ -163,9 +163,11 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <button data-preset="mixed">복합 (지상 4 · 지하 2)</button>
         <button data-preset="rush">출근 몰림 (입차 520대/시)</button>
         <button data-preset="leave">퇴근 몰림 (출차 600대/시)</button>
+        <button data-preset="mech">기계식 주차타워 (4기 × 12단)</button>
       </div>
       <div class="sect">규모</div>
       <div class="grid">
+        <div class="fld"><label>형식</label><select id="c_kind"><option value="ramp">자주식 — 경사로로 직접 운전 (주차빌딩 · 지하주차장)</option><option value="mech">기계식 주차타워 — 승강기가 차를 넣고 꺼낸다</option></select><div class="hint">기계식은 가로 9.4 m 마다 탑 1기, 지상 층수 = 칸 단수(층마다 좌우 2칸), 지하 = 피트 단수. 세로는 쓰지 않는다.</div></div>
         <div class="fld"><label>가로 (동서) <span class="val" id="v_W"></span></label><input type="range" id="c_W" min="36" max="160" step="2"><div class="hint">서쪽 7.6 m 는 경사로 칸. 통로 하나가 양쪽 주차열과 함께 16 m 를 쓴다.</div></div>
         <div class="fld"><label>세로 (남북) <span class="val" id="v_D"></span></label><input type="range" id="c_D" min="34" max="120" step="2"><div class="hint">45 m 이상이면 남 · 북 가장자리에도 주차열을 둔다. 경사로 길이도 세로를 따른다.</div></div>
         <div class="fld"><label>지상 층수 <span class="val" id="v_U"></span></label><input type="range" id="c_U" min="0" max="15" step="1"><div class="hint">1층이 입구층. 0 이면 지면은 광장이고 주차는 지하에만.</div></div>
@@ -222,6 +224,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 <script src="js/parking/garage.js"></script>
 <script src="js/parking/park.js"></script>
 <script src="js/parking/pscene.js"></script>
+<script src="js/parking/mech.js"></script>
 <script src="js/parking/pmain.js"></script>
 </body>
 </html>
