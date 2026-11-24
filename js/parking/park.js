@@ -602,7 +602,7 @@ class ParkSim {
     let best = null, bc = Infinity;
     for (const s of G.stalls) {
       if (s.state !== 'free' || !stallOk(v, s)) continue;
-      const c = G._dEnt.get(s.ed.id) + s.s + this.rng.range(0, 25);
+      const c = G._dEnt.get(s.ed.id) + s.s + this.rng.range(0, 25) - (((s.type === 'ev' && v.ev) || (s.type === 'dis' && v.dis)) ? 40 : 0);
       if (c < bc) { bc = c; best = s; }
     }
     if (best) { best.state = 'res'; best.car = v; v.stall = best; v.guided = true; v.searching = false; }
@@ -633,7 +633,10 @@ class ParkSim {
       if (s.state !== 'free' && !(s.state === 'leave' && !s.next && s.car && !s.car.driverAway)) continue;
       if (!stallOk(v, s)) continue;
       v.seen.add(s.id);
-      if (!this.rng.chance(s.state === 'leave' ? 0.7 : 0.92)) continue;
+      // 자기 전용 구획(충전 · 장애인)은 거의 늘 고르고, 그런 차는 일반 면을 조금 덜 고른다 (전용 구획을 찾아 더 간다)
+      const mine = (s.type === 'ev' && v.ev) || (s.type === 'dis' && v.dis);
+      const pAcc = s.state === 'leave' ? 0.7 : mine ? 0.99 : (v.ev || v.dis) ? 0.8 : 0.92;
+      if (!this.rng.chance(pAcc)) continue;
       if (s.state === 'leave') {
         const hold = s.s - (s.car && s.car.nose === 'in' ? 11.5 : 6.5);
         if (v.s + v.v * v.v / 3 > hold) continue;
