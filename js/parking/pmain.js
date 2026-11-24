@@ -213,6 +213,7 @@ const PApp = {
       else if (k === 'v' || k === 'V') this.setMode(this.mode === 'driver' ? 'follow' : 'driver');
       else if (k === 'h' || k === 'H') this.toggleHeat();
       else if (k === 'n' || k === 'N') this.toggleNight();
+      else if (k === 'i' || k === 'I') this.incident();
       else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { this.sel = null; this.setMode('orbit'); } }
       else if (k === 'p' || k === 'P') this.panel(!$('#panel').classList.contains('on'));
     });
@@ -268,6 +269,14 @@ const PApp = {
     $('#bNight').classList.toggle('on', this.night);
     $('#bNight').textContent = this.night ? '야간' : '주간';
   },
+  /** 통로 고장 차 — 그 차를 비추고 알린다 */
+  incident() {
+    if (this.G.mech) { this.toast('기계식에는 통로가 없습니다', 2); return; }
+    const v = this.sim.incident();
+    if (!v) { this.toast(this.sim.brokenCar ? '이미 고장 난 차가 있습니다' : '지금 통로를 달리는 차가 없습니다', 2.5); return; }
+    this.sel = v; this.cut = PScene.lvAt(v.z); this.mode = 'orbit'; this.retarget(); this.updMode();
+    this.toast(`${this.G.levels[PScene.lvAt(v.z)].name} 통로에서 차가 고장으로 섰습니다 — ${Math.round((v.brokenUntil - this.sim.time) / 60)}분쯤 뒤 움직입니다`, 4);
+  },
   toggleHeat() {
     this.heat = !this.heat; $('#bHeat').classList.toggle('on', this.heat);
     if (this.heat) this.toast('탐색 열지도 — 빈 자리를 찾는 차가 오래 머문 통로일수록 붉다 (보이는 층)', 3.5);
@@ -283,6 +292,7 @@ const PApp = {
     $('#bUp').onclick = () => this.setCut(this.cut + 1);
     $('#bHeat').onclick = () => this.toggleHeat();
     $('#bNight').onclick = () => this.toggleNight();
+    $('#bInc').onclick = () => this.incident();
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
     $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };
@@ -449,7 +459,7 @@ const PApp = {
         v.mode === 'mech' ? (v.leaving ? '출고 중 (승강기 · 턴테이블)' : '입고 중 (승강기로 칸에 넣는 중)') :
         v.mode === 'man' ? ({ revIn: '후면주차 중 (후진)', fwdIn: '전면주차 중', outFwd: '출차 — 앞으로 빠짐', outRev: '출차 — 후진으로 빠짐' }[v.man.kind]) :
           v.role === 'thru' ? '통과 차량' : v.done ? '나가는 중' : !v.inside ? (v.balk ? '대기열이 길어 지나감' : '입구로') :
-            v.leaving ? '출구로' : v.giveUp ? '못 찾고 나감' : v.plan ? (v.plan.how === 'rev' ? '후면주차 준비' : '전면주차 준비') :
+            v.broken ? '고장 — 비상등 켜고 서 있음' : v.leaving ? '출구로' : v.giveUp ? '못 찾고 나감' : v.plan ? (v.plan.how === 'rev' ? '후면주차 준비' : '전면주차 준비') :
               v.waitFor ? '나가는 차를 기다림' : v.stall ? (v.guided ? '배정된 면으로' : '고른 면으로') : '빈 자리 찾는 중';
       const lv = G.levels[PScene.lvAt(v.z)].name;
       const tIn = v.tGate ? this.sim.time - v.tGate : 0;

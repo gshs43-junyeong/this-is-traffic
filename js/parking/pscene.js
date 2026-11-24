@@ -688,7 +688,9 @@ const PScene = {
     }
     const bl = v.blink || (v.mode === 'drive' ? v.tblink : 0);
     if (bl && (Math.floor((t + v.blinkPhase) * 1.7) & 1)) {
-      for (const end of [1, -1]) {
+      const sides = bl === 2 ? [1, -1] : [bl];       // 2 = 비상등 (양쪽)
+      for (const bs of sides) for (const end of [1, -1]) {
+        const bl = bs;
         const ex = v.x + ch * L * end * 0.98 - sh * v.wid * 0.5 * bl, ey = v.y + sh * L * end * 0.98 + ch * v.wid * 0.5 * bl;
         Render.mark(ex, ey, v.z + zT * 0.9, sz, sz * 0.7, '#ffa825');
         Render.glow(ex, ey, v.z + zT * 0.9, sz * 3, '#ffa825', '#ffa82544', 0.5);

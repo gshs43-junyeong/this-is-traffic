@@ -81,6 +81,16 @@ class ParkSim {
     this.peds = [];
     this.prefill(cfg.initOcc);
   }
+  /** 통로 고장 — 통로를 달리던 차 한 대가 2~4 분 비상등을 켜고 선다 */
+  incident() {
+    if (this.brokenCar) return null;
+    const c = this.act.filter((v) => v.mode === 'drive' && v.inside && v.v > 0.5 && v.edge && (v.edge.kind === 'loop' || v.edge.kind === 'aisle'));
+    if (!c.length) return null;
+    const v = this.rng.pick(c);
+    v.broken = true; v.brokenUntil = this.time + this.rng.range(120, 240); v.blink = 2;
+    this.brokenCar = v;
+    return v;
+  }
   /** 지금 n 대를 더 들여보낸다 (앞 도로에 차례로 나타난다) */
   addArrivals(n) { this.batch = (this.batch || 0) + n; }
   /** 세워 둔 차 n 대에게 지금 출차를 시킨다 (오래 세운 차부터) */
@@ -188,6 +198,7 @@ class ParkSim {
     // 간선 위 차 정렬
     for (const ed of G.edges) if (ed.cars.length > 1) sortByS(ed.cars);
     if (this.peds.length) this.walk(dt);
+    if (this.brokenCar && this.time > this.brokenCar.brokenUntil) { this.brokenCar.broken = false; this.brokenCar.blink = 0; this.brokenCar = null; }
     // 교착 풀기 — 합류점 앞에서 4 분 넘게 선 차는 경로 앞의 빈자리로 옮긴다 (SUMO 의 teleport 와 같은 장치)
     this.jamT = (this.jamT || 0) + dt;
     if (this.jamT > 5) {
@@ -309,7 +320,7 @@ class ParkSim {
           if (dl !== 0 && Math.sign(dl) !== v.pref) c += 350;
           if (c < bc) { bc = c; best = f; }
         }
-        const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0);
+        const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0);
         const to = ed.to;
         if (dist[u.id] + w < dist[to.id]) { dist[to.id] = dist[u.id] + w; first[to.id] = f; open.push(to); }
       }
@@ -406,6 +417,7 @@ class ParkSim {
   /** 앞을 훑어 가장 강한 감속 요인을 IDM 으로 낸다 */
   accel(v) {
     const G = this.G;
+    if (v.broken) { v.why = 'broken'; return -Math.min(3, v.v / 0.3 + 0.5); }      // 고장 — 그 자리에 선다
     let ed = v.edge, base = -v.s, k = v.ri;
     // 희망속도 — 간선 제한 · 탐색 서행 · 앞쪽 곡률
     let v0 = ed.vmax * v.vMul;

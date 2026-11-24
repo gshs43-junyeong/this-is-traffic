@@ -494,7 +494,7 @@ function routeTo(G, fromNode, goalEdge, forbidExit) {
       if (ed.kind === 'street') continue;
       /* 줄이 보이는 통로는 피한다 — 간선 위 차 한 대마다 8 m 를 더한다. 오르는 차와 내려가는 차가
          같은 지름길에 몰려 서로의 경사로 입구를 막는 고리 교착을 줄인다 */
-      const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.north ? ed.cars.length * 8 : 0);
+      const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.north ? ed.cars.length * 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0);
       const v = ed.to;
       if (dist[u.id] + w < dist[v.id]) { dist[v.id] = dist[u.id] + w; prev[v.id] = ed; open.push(v); }
     }
