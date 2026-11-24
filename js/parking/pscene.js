@@ -88,6 +88,14 @@ function carMesh(emit, v, x, y, z, h, p, covered, full) {
         P(B[0] * L, B[1] * Wd * 0.86, B[3] * Hk + 0.012), P(A[0] * L, A[1] * Wd * 0.86, A[3] * Hk + 0.012), GLASS);
       q++;
     }
+    // 등화 — 뒤는 빨간 후미등, 앞은 흰 전조등 (마구리 면 바로 바깥)
+    const lz0 = Math.max(R[2], F[2]) * Hk + 0.28, lz1 = lz0 + 0.14;
+    for (const sd of [-1, 1]) {
+      const yr = R[1] * Wd * 0.62 * sd, yf = F[1] * Wd * 0.6 * sd;
+      emit.quad(P(R[0] * L - 0.012, yr - 0.2, lz0), P(R[0] * L - 0.012, yr + 0.2, lz0), P(R[0] * L - 0.012, yr + 0.2, lz1), P(R[0] * L - 0.012, yr - 0.2, lz1), '#a4241c');
+      emit.quad(P(F[0] * L + 0.012, yf - 0.18, lz0), P(F[0] * L + 0.012, yf + 0.18, lz0), P(F[0] * L + 0.012, yf + 0.18, lz1), P(F[0] * L + 0.012, yf - 0.18, lz1), '#e9eef2');
+      q += 2;
+    }
     // 바퀴 — 바깥 면만 (차체가 위를 가린다)
     const wr = 0.33, ax2 = L * 0.62;
     for (const wx of [ax2, -ax2 * 0.98]) for (const sd of [1, -1]) {
@@ -188,7 +196,7 @@ const PScene = {
     const topL = G.levels[G.NL - 1];
     if (!G.mech && !topL.under && topL.park) {
       for (let x = PK.RW + 6; x < W - 2; x += 16) for (const y of [0.45, D - 0.45]) {
-        A.box(x - 0.1, y - 0.1, topL.z, x + 0.1, y + 0.1, topL.z + 6, NX('#6b7076'), false, true);
+        part(G.NL - 1).box(x - 0.1, y - 0.1, topL.z, x + 0.1, y + 0.1, topL.z + 6, NX('#6b7076'), false, true);   // 옥상 층과 함께 숨는다
         this.lamps.push([x, y + (y < 1 ? 0.6 : -0.6), topL.z + 5.9, G.NL - 1]);
       }
     }
@@ -409,7 +417,7 @@ const PScene = {
   /* ---------- 세워 둔 차 칸 ---------- */
   buildSlots() {
     const G = this.G;
-    this.SLOT = 34 * 6;
+    this.SLOT = 40 * 6;          // 차 한 대 최대 사각형 수 × 6 정점 (등화 · 바퀴 포함)
     // 층 순서대로 칸을 둔다 — 층 구간이 이어지게
     const order = G.stalls.slice().sort((a, b) => a.level - b.level || a.id - b.id);
     this.slotOf = new Map();
