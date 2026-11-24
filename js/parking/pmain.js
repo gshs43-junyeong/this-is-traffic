@@ -92,7 +92,7 @@ const PApp = {
     this.overlay();
     this.drawMs = (this.drawMs || 0) * 0.9 + (performance.now() - t1) * 0.1;
     this.hudT = (this.hudT || 0) + raw;
-    if (this.hudT > 0.25) { this.hudT = 0; this.hud(); }
+    if (this.hudT > 0.25) { this.hudT = 0; this.hud(); this.anaT = (this.anaT || 0) + 1; if (this.anaT % 8 === 0 && $('#panel').classList.contains('on')) this.analysis(); }
     requestAnimationFrame((tt) => this.loop(tt));
   },
 
@@ -285,7 +285,42 @@ const PApp = {
     this.save();
   },
   save() { try { localStorage.setItem('parkcfg', JSON.stringify(this.cfg)); } catch (e) { /* 무시 */ } },
-  panel(on) { $('#panel').classList.toggle('on', on); if (on) this.fillPanel(); },
+  panel(on) { $('#panel').classList.toggle('on', on); if (on) { this.fillPanel(); this.analysis(); } },
+  /** 분석 칸 — 소요 시간 분포(분 단위 막대)와 층별 표 */
+  analysis() {
+    const hist = (id, lab, arr) => {
+      const cv = $(id), ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
+      ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#0d1118'; ctx.fillRect(0, 0, W, H);
+      const a = arr.slice().sort((x, y) => x - y);
+      if (!a.length) { $(lab).textContent = '기록 없음'; ctx.fillStyle = '#69728a'; ctx.font = '22px system-ui'; ctx.fillText('아직 기록이 없습니다', 20, H / 2); return; }
+      const q = (f) => a[Math.min(a.length - 1, Math.floor(a.length * f))];
+      $(lab).textContent = `${a.length}대 · 중앙 ${mmss(q(0.5))} · 90% ${mmss(q(0.9))}`;
+      const bw = 30, nb = Math.max(4, Math.min(20, Math.ceil(q(0.98) / bw) + 1));      // 30 초 칸
+      const c = new Array(nb).fill(0);
+      for (const x of a) c[Math.min(nb - 1, Math.floor(x / bw))]++;
+      const mx = Math.max(...c), pw = (W - 40) / nb;
+      ctx.font = '18px system-ui'; ctx.textAlign = 'center';
+      c.forEach((n, i) => {
+        const h = (H - 40) * n / mx;
+        ctx.fillStyle = '#5fc48f'; ctx.fillRect(30 + i * pw + 2, H - 28 - h, pw - 4, h);
+        if (i % 2 === 0) { ctx.fillStyle = '#8d96a8'; ctx.fillText(mmss(i * bw), 30 + i * pw + 2, H - 6); }
+      });
+      const xm = 30 + q(0.5) / bw * pw;
+      ctx.strokeStyle = '#e0a63a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(xm, 6); ctx.lineTo(xm, H - 28); ctx.stroke();
+    };
+    const st = this.sim.st;
+    hist('#hSearch', '#aSearch', st.search);
+    hist('#hExit', '#aExit', st.exitT);
+    const S = this.sim.summary(), G = this.G;
+    let h = '<tr style="color:#8d96a8"><th style="text-align:left">층</th><th>면</th><th>점유</th><th>점유율</th><th>지금 찾는 차</th></tr>';
+    const hunt = G.levels.map(() => 0);
+    for (const v of this.sim.cars) if (v.inside && v.searching && v.edge && v.edge.level >= 0) hunt[v.edge.level]++;
+    for (let i = G.NL - 1; i >= 0; i--) {
+      const p = S.per[i];
+      h += `<tr><td>${G.levels[i].name}</td><td style="text-align:right">${p.n}</td><td style="text-align:right">${p.occ}</td><td style="text-align:right">${p.n ? Math.round(p.occ / p.n * 100) + '%' : '—'}</td><td style="text-align:right">${hunt[i]}</td></tr>`;
+    }
+    $('#lvTable').innerHTML = h;
+  },
   fields: {
     W: [(v) => v + ' m'], D: [(v) => v + ' m'], U: [(v) => v === 0 ? '없음 (지면 광장)' : v + '개 층'], B: [(v) => v === 0 ? '없음' : v + '개 층'],
     inRate: [(v) => v + ' 대/시'], outRate: [(v) => v + ' 대/시'], thruRate: [(v) => v + ' 대/시'],
