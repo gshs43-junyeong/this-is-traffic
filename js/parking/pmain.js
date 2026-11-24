@@ -350,7 +350,6 @@ const PApp = {
   },
   save() { try { localStorage.setItem('parkcfg', JSON.stringify(this.cfg)); } catch (e) { /* 무시 */ } },
   panel(on) { $('#panel').classList.toggle('on', on); if (on) { this.fillPanel(); this.analysis(); } },
-  /** 기록 내려받기 — 시계열과 차마다의 기록을 CSV 두 묶음으로 (엑셀이 한글을 읽게 BOM) */
   /** 미리 돌려 보기 — 설정 몇 벌을 화면 밖에서 1 시간씩 돌려 표로 견준다 (화면이 멈추지 않게 조금씩) */
   preview() {
     if (this.pv) return;
@@ -399,6 +398,7 @@ const PApp = {
     next(); work();
   },
 
+  /** 기록 내려받기 — 시계열과 차마다의 기록을 CSV 두 묶음으로 (엑셀이 한글을 읽게 BOM) */
   download() {
     const st = this.sim.st, q = (x) => (typeof x === 'number' ? (Math.round(x * 100) / 100) : '"' + String(x).replace(/"/g, '""') + '"');
     const lines = ['# 시계열 (10 초 간격)', 'sim_s,hour,occupied,total,searching,maneuvering,queue_in,queue_out,entered,exited,passed_by'];
@@ -452,7 +452,7 @@ const PApp = {
     $('#lvTable').innerHTML = h;
   },
   fields: {
-    W: [(v) => v + ' m'], D: [(v) => v + ' m'], U: [(v) => v === 0 ? '없음 (지면 광장)' : v + '개 층'], B: [(v) => v === 0 ? '없음' : v + '개 층'],
+    W: [(v) => v + ' m'], D: [(v) => v + ' m'], U: [(v) => $('#c_kind').value === 'mech' ? Math.max(1, v) + ' 단' : v === 0 ? '없음 (지면 광장)' : v + '개 층'], B: [(v) => v === 0 ? '없음' : v + ($('#c_kind').value === 'mech' ? ' 단' : '개 층')],
     inRate: [(v) => v + ' 대/시'], outRate: [(v) => v + ' 대/시'], thruRate: [(v) => v + ' 대/시'],
     initOcc: [(v) => Math.round(v * 100) + ' %'], revShare: [(v) => Math.round(v * 100) + ' %'], balk: [(v) => v + ' 대'], seed: [(v) => '' + v],
   },
@@ -490,6 +490,18 @@ const PApp = {
     for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare']) {
       const f = $('#' + id) && $('#' + id).closest('.fld');
       if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
+    }
+    // 규모 칸의 이름 · 설명도 형식에 맞춘다
+    const H = {
+      W: ['가로 (동서)', mech ? '탑 1 기가 9.4 m — 가로가 길수록 탑이 늘어 승강기가 많아진다.' : '서쪽 7.6 m 는 경사로 칸. 통로 하나가 양쪽 주차열과 함께 16 m 를 쓴다.'],
+      U: [mech ? '칸 단수 (지상)' : '지상 층수', mech ? '1 층은 입출고실 · 대기 로비, 그 위로 단마다 좌우 2 칸.' : '1층이 입구층. 0 이면 지면은 광장이고 주차는 지하에만.'],
+      B: [mech ? '피트 단수 (지하)' : '지하 층수', mech ? '승강기가 지하로도 내려가 칸을 더 둔다.' : '층고 3.2 m, 지하층은 옹벽으로 둘러싸인다.'],
+    };
+    for (const k in H) {
+      const f = $('#c_' + k).closest('.fld'), lab = f.querySelector('label'), val = $('#v_' + k);
+      lab.firstChild.textContent = H[k][0] + ' ';
+      f.querySelector('.hint').textContent = H[k][1];
+      if (val) val.textContent = this.fields[k][0](+$('#c_' + k).value);
     }
   },
   /** 설정 창의 규모 미리 셈 — 짓기 전에 면 수를 알려 준다 */
