@@ -149,6 +149,12 @@ class ParkSim {
     // 간선 위 차 정렬
     for (const ed of G.edges) if (ed.cars.length > 1) sortByS(ed.cars);
     if (this.peds.length) this.walk(dt);
+    // 교착 풀기 — 합류점 앞에서 4 분 넘게 선 차는 경로 앞의 빈자리로 옮긴다 (SUMO 의 teleport 와 같은 장치)
+    this.jamT = (this.jamT || 0) + dt;
+    if (this.jamT > 5) {
+      this.jamT = 0;
+      for (const v of this.act) if (v.mode === 'drive' && v.stopT > 240 && v.why instanceof PNode) this.unjam(v);
+    }
     // 기록
     this.histT += dt;
     if (this.histT >= 10) { this.histT = 0; this.record(); }
@@ -179,8 +185,8 @@ class ParkSim {
   }
 
   /* ---------- 경로 ---------- */
-  planAhead(v) {
-    while (v.route.length - v.ri < 4) {
+  planAhead(v, n) {
+    while (v.route.length - v.ri < (n || 4)) {
       const last = v.route[v.route.length - 1];
       const nd = last.to;
       if (!nd.outs.length) break;
@@ -831,6 +837,31 @@ class ParkSim {
     return out;
   }
 
+  unjam(v) {
+    this.planAhead(v, 14);
+    for (let i = v.ri + 1; i < v.route.length; i++) {
+      const e = v.route[i];
+      if (e.kind === 'street' || e.gate) break;
+      // 이 간선에서 차 길이 + 3 m 이 비는 첫 틈
+      const cs = e.cars.slice().sort((a, b) => a.s - b.s);
+      let lo = 0.5;
+      for (let k = 0; k <= cs.length; k++) {
+        const hi = k < cs.length ? cs[k].s - cs[k].len : e.len - 0.5;
+        const blocked = e.blk.some((b) => b.own !== v && !(b.s1 < lo || b.s0 > lo + v.len + 3));
+        if (hi - lo >= v.len + 3 && !blocked) {
+          const old = v.edge, j = old.cars.indexOf(v); if (j >= 0) old.cars.splice(j, 1);
+          this.dropRes(v);
+          v.prev = v.route[i - 1]; v.edge = e; v.ri = i; v.s = lo + v.len + 1; v.v = 0.5; v.stopT = 0; v.mWait = 0;
+          e.cars.push(v);
+          this.st.unjam = (this.st.unjam || 0) + 1;
+          this.planAhead(v); this.pose(v);
+          return true;
+        }
+        if (k < cs.length) lo = cs[k].s + 1.5;
+      }
+    }
+    return false;
+  }
   /* ---------- 사람 (운전자) ---------- */
   /** 출차 — 운전자를 계단실에서 차로 걸어오게 한다. 도착해야 차가 움직인다 */
   callDriver(v) {
@@ -982,7 +1013,7 @@ class ParkSim {
     return {
       total: G.stalls.length, occ, res, free: G.stalls.length - occ - res, per,
       hunting, man, qIn, qOut, inside, wantOut, coming: (this.pending | 0) + (this.batch | 0),
-      inN: this.st.inN, outN: this.st.outN, lost: this.st.lost, gaveUp: this.st.gaveUp,
+      inN: this.st.inN, outN: this.st.outN, lost: this.st.lost, gaveUp: this.st.gaveUp, unjam: this.st.unjam | 0,
       searchAvg: avg(this.st.search, 40), exitAvg: avg(this.st.exitT, 40), queueAvg: avg(this.st.queueT, 40),
     };
   }

@@ -332,7 +332,7 @@ const PApp = {
     st('#sExit', S.exitAvg ? mmss(S.exitAvg) : '—');
     st('#sQueue', S.queueAvg ? mmss(S.queueAvg) : '—');
     st('#sIO', `${S.inN} / ${S.outN}`);
-    st('#sLost', `${S.lost} / ${S.gaveUp}`);
+    st('#sLost', `${S.lost} / ${S.gaveUp}` + (S.unjam ? ` · 교착 ${S.unjam}` : ''));
     st('#clock', mmss(this.sim.time) + (this.speed > 1 ? ` · ×${this.speed}` : ''));
     st('#perf', `${(this.drawMs || 0).toFixed(1)} ms · 계산 ${(this.simMs || 0).toFixed(1)} ms · ${this.sim.cars.length} 대`);
     // 선택한 차
