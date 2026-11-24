@@ -555,7 +555,9 @@ const PApp = {
       for (const T of G.towers) {
         const q = Render.point(T.x, -0.4, MK.ground + 0.6);
         if (!q) continue;
-        const t = `${T.idx + 1}호기` + (T.q.length ? ` · 출고 대기 ${T.q.length}` : '');
+        const nin = T.lin.cars.filter((c) => c !== T.carOn).length;
+        const doing = T.state === 'idle' ? '' : ['fetch', 'pull', 'lower', 'turn', 'board', 'out', 'clear'].includes(T.state) ? ' ▼출고' : ' ▲입고';
+        const t = `${T.idx + 1}호기${doing}` + (nin ? ` · 입고 대기 ${nin}` : '') + (T.q.length ? ` · 출고 대기 ${T.q.length}` : '');
         const w = ctx.measureText(t).width + 10;
         ctx.fillStyle = '#10141bcc'; ctx.fillRect(q.x - w / 2, q.y - 9, w, 18);
         ctx.fillStyle = T.state === 'idle' ? '#7fe0a8' : '#ffd59f'; ctx.fillText(t, q.x, q.y);
