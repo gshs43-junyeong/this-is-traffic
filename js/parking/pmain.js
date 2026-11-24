@@ -336,8 +336,8 @@ const PApp = {
     const st = this.sim.st, q = (x) => (typeof x === 'number' ? (Math.round(x * 100) / 100) : '"' + String(x).replace(/"/g, '""') + '"');
     const lines = ['# 시계열 (10 초 간격)', 'sim_s,hour,occupied,total,searching,maneuvering,queue_in,queue_out,entered,exited,passed_by'];
     for (const r of st.hist2 || []) lines.push([r.t, r.h, r.occ, r.total, r.hunt, r.man, r.qIn, r.qOut, r.inN, r.outN, r.lost].map(q).join(','));
-    lines.push('', '# 차마다의 기록 (주차 · 입고 = 차단기/문 앞부터 주차까지, 출차 · 출고 = 호출부터 출구까지)', 'sim_s,event,car_id,class,duration_s,level,stall_type');
-    for (const r of st.log || []) lines.push([r.t, r.kind, r.id, r.cls, r.dur, r.level, r.type].map(q).join(','));
+    lines.push('', '# 차마다의 기록 (주차 · 입고 = 차단기/문 앞부터 주차까지, 출차 · 출고 = 호출부터 출구까지)', 'sim_s,event,car_id,class,duration_s,level,stall_type,search_distance_m');
+    for (const r of st.log || []) lines.push([r.t, r.kind, r.id, r.cls, r.dur, r.level, r.type, r.cruise].map(q).join(','));
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -369,6 +369,10 @@ const PApp = {
     };
     const st = this.sim.st;
     hist('#hSearch', '#aSearch', st.search);
+    if (st.cruise && st.cruise.length && !this.G.mech) {
+      const c = st.cruise.slice().sort((a, b) => a - b);
+      $('#aSearch').textContent += ` · 주차까지 주행 중앙 ${Math.round(c[c.length >> 1])} m`;
+    }
     hist('#hExit', '#aExit', st.exitT);
     const S = this.sim.summary(), G = this.G;
     let h = '<tr style="color:#8d96a8"><th style="text-align:left">층</th><th>면</th><th>점유</th><th>점유율</th><th>지금 찾는 차</th></tr>';

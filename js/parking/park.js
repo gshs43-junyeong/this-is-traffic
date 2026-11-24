@@ -337,7 +337,8 @@ class ParkSim {
     v.s += (v.v + nv) * 0.5 * dt;
     v.v = nv;
     if (v.v < 0.1) v.stopT += dt; else v.stopT = 0;
-    if (v.searching && v.inside && v.edge) v.edge.hunt = (v.edge.hunt || 0) + dt;   // 탐색 열지도
+    if (v.searching && v.inside && v.edge) v.edge.hunt = (v.edge.hunt || 0) + dt;      // 탐색 열지도
+    if (v.inside && !v.leaving && !v.giveUp && !v.done) v.cruise = (v.cruise || 0) + v.v * dt;   // 차단기 → 주차까지 달린 거리
     // 간선 넘기기
     while (v.edge && v.s > v.edge.len) {
       const nx = v.route[v.ri + 1];
@@ -846,6 +847,7 @@ class ParkSim {
       if (v.plan && v.plan.blk) this.dropBlk(v.plan.blk);
       v.plan = null; v.man = null;
       this.st.search.push(this.time - v.tGate); this.logEvt('주차', v, this.time - v.tGate, s);
+      (this.st.cruise || (this.st.cruise = [])).push(v.cruise || 0);
       v.revPick = null;
       this.parkAt(v, s, M.kind === 'revIn' ? 'out' : 'in');
       v.tPark = this.time;
@@ -1070,7 +1072,7 @@ class ParkSim {
   /** 차마다의 기록 (CSV 내려받기용) — 최근 2 만 건 */
   logEvt(kind, v, dur, stall) {
     const L = this.st.log || (this.st.log = []);
-    L.push({ t: this.time, kind, id: v.id, cls: v.cls.name, dur, level: stall ? this.G.levels[stall.level].name : '', type: stall ? stall.type || '' : '' });
+    L.push({ t: this.time, kind, id: v.id, cls: v.cls.name, dur, level: stall ? this.G.levels[stall.level].name : '', type: stall ? stall.type || '' : '', cruise: kind === '주차' ? (v.cruise || 0) : '' });
     if (L.length > 20000) L.shift();
   }
   record() {
