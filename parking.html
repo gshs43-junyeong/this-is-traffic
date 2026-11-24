@@ -199,6 +199,9 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="fld"><label>출차 소요 분포 (호출 → 출구) <span class="val" id="aExit"></span></label><canvas id="hExit" width="560" height="200" style="width:100%"></canvas></div>
         <div class="fld"><label>층별</label><table id="lvTable" style="width:100%;font-size:12px;border-collapse:collapse"></table></div>
       </div>
+      <div class="sect">미리 돌려 보기 — 같은 수요로 1 시간 <button id="bPv" style="margin-left:10px;padding:4px 10px;font-size:11.5px">비교 실행</button> <span id="pvMsg" style="font-size:11.5px;color:#8d96a8;margin-left:8px"></span></div>
+      <div style="margin:-2px 0 8px;font-size:11.5px;color:#8d96a8">지금 설정과 한 가지만 바꾼 설정을 화면 밖에서 같은 시드로 처음부터 1 시간씩 돌려 견준다 — 자주식은 유도 · 정산 방식 · 차단기 차로 수, 기계식은 탑 수.</div>
+      <table id="pvTable" style="width:100%;font-size:12px;border-collapse:collapse"></table>
       <div class="sect">모형</div>
       <div class="doc">
         <h4>주행</h4>

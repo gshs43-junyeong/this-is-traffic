@@ -321,6 +321,7 @@ const PApp = {
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
     $('#bCsv').onclick = () => this.download();
+    $('#bPv').onclick = () => this.preview();
     $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };
     $('#bOut').onclick = () => { const n = +$('#nBatch').value; const k = this.sim.addDepartures(n); this.toast(k ? `${k}대가 출차를 시작합니다 (통로가 비면 빠져나옵니다)` : '세워 둔 차가 없습니다', 2.5); };
     $('#bClose').onclick = () => this.panel(false);
@@ -350,6 +351,54 @@ const PApp = {
   save() { try { localStorage.setItem('parkcfg', JSON.stringify(this.cfg)); } catch (e) { /* 무시 */ } },
   panel(on) { $('#panel').classList.toggle('on', on); if (on) { this.fillPanel(); this.analysis(); } },
   /** 기록 내려받기 — 시계열과 차마다의 기록을 CSV 두 묶음으로 (엑셀이 한글을 읽게 BOM) */
+  /** 미리 돌려 보기 — 설정 몇 벌을 화면 밖에서 1 시간씩 돌려 표로 견준다 (화면이 멈추지 않게 조금씩) */
+  preview() {
+    if (this.pv) return;
+    const base = Object.assign({}, this.cfg), mech = base.kind === 'mech';
+    const V = [['지금 설정', {}]];
+    if (mech) {
+      const nT = (W) => Math.max(1, Math.floor((Math.max(12, W) - 7.2) / MK.space) + 1), n = nT(base.W);
+      V.push([`탑 ${n + 1}기 (1기 더)`, { W: base.W + MK.space }]);
+      if (n > 1) V.push([`탑 ${n - 1}기 (1기 덜)`, { W: base.W - MK.space }]);
+    } else {
+      V.push([base.guide ? '유도 끔' : '유도 켬', { guide: !base.guide }]);
+      V.push([base.gate === 'lpr' ? '주차권 · 출구 정산' : '번호판 인식', { gate: base.gate === 'lpr' ? 'ticket' : 'lpr' }]);
+      V.push([(base.lanes | 0) >= 2 ? '차단기 1차로' : '차단기 2차로', { lanes: (base.lanes | 0) >= 2 ? 1 : 2 }]);
+    }
+    const rows = [], DUR = 3600;
+    let vi = -1, sim = null, t = 0, qMax = 0;
+    const next = () => {
+      vi++;
+      if (vi >= V.length) { this.pv = false; $('#bPv').disabled = false; $('#pvMsg').textContent = '끝 — 같은 시드 · 처음부터 1 시간'; return; }
+      const c = Object.assign({}, base, V[vi][1]);
+      const G = mech ? buildMech(c) : buildGarage(c);
+      sim = mech ? new MechSim(G, c) : new ParkSim(G, c);
+      t = 0; qMax = 0;
+    };
+    const q = (a, f) => { if (!a.length) return '—'; const b = a.slice().sort((x, y) => x - y); return mmss(b[Math.min(b.length - 1, Math.floor(b.length * f))]); };
+    const draw = () => {
+      let h = '<tr style="color:#8d96a8"><th style="text-align:left">설정</th><th>입차</th><th>출차</th><th>주차 소요 중앙 · 90%</th><th>출차 소요 중앙 · 90%</th><th>입구 대기 최대</th><th>지나감 · 포기</th></tr>';
+      for (const r of rows) h += `<tr${r.base ? ' style="color:#7fe0a8"' : ''}><td>${r.name}</td><td style="text-align:right">${r.inN}</td><td style="text-align:right">${r.outN}</td><td style="text-align:right">${r.park}</td><td style="text-align:right">${r.exit}</td><td style="text-align:right">${r.qMax} 대</td><td style="text-align:right">${r.lost} · ${r.gaveUp}</td></tr>`;
+      $('#pvTable').innerHTML = h;
+    };
+    const work = () => {
+      const t0 = performance.now();
+      while (performance.now() - t0 < 45 && t < DUR) {
+        sim.step(1); t++;
+        if (t % 10 === 0) qMax = Math.max(qMax, sim.summary().qIn);
+      }
+      $('#pvMsg').textContent = `계산 중 — ${vi + 1}/${V.length} · ${Math.round(t / DUR * 100)}%`;
+      if (t >= DUR) {
+        const st = sim.st;
+        rows.push({ name: V[vi][0], base: vi === 0, inN: st.inN, outN: st.outN, park: q(st.search, 0.5) + ' · ' + q(st.search, 0.9), exit: q(st.exitT, 0.5) + ' · ' + q(st.exitT, 0.9), qMax, lost: st.lost, gaveUp: st.gaveUp });
+        draw(); next();
+      }
+      if (this.pv) setTimeout(work, 0);
+    };
+    this.pv = true; $('#bPv').disabled = true; rows.length = 0; draw();
+    next(); work();
+  },
+
   download() {
     const st = this.sim.st, q = (x) => (typeof x === 'number' ? (Math.round(x * 100) / 100) : '"' + String(x).replace(/"/g, '""') + '"');
     const lines = ['# 시계열 (10 초 간격)', 'sim_s,hour,occupied,total,searching,maneuvering,queue_in,queue_out,entered,exited,passed_by'];
