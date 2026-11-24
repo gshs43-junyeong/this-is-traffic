@@ -531,6 +531,9 @@ class ParkSim {
   gateLogic(v, dt) {
     const g = v.edge.gate;
     if (!g) return;
+    // 연 차 · 정산 중인 차가 이 차로를 떠났으면(교착 풀기로 옮겨진 경우 등) 풀어 준다
+    if (g.open && g.open.edge !== v.edge) g.open = null;
+    if (g.busy && (g.busy.edge !== v.edge || g.busy.mode !== 'drive')) g.busy = null;
     if (g.open === v) {
       if (v.s - v.len > g.s + 0.6) { g.open = null; g.close = 1; }
       return;
@@ -761,7 +764,6 @@ class ParkSim {
     if (g.t === 'wait') {
       M.t += dt; v.v = 0; v.brake = true;
       if (M.t >= g.d) { M.k++; M.t = 0; M.u = 0; }
-      this.pose3(v);
       return;
     }
     const L = Math.max(0.05, this.segLen(g));
@@ -796,9 +798,7 @@ class ParkSim {
     // 전면주차: 원호를 다 돌면 통로를 풀어 준다
     if (M.kind === 'fwdIn' && M.k >= 1 && v.plan && v.plan.blk) { this.dropBlk(v.plan.blk); v.plan.blk = null; }
     if (f >= 1) { M.k++; M.u = 0; M.sp *= 0.3; }
-    this.pose3(v);
   }
-  pose3() {}
   dropBlk(b) {
     if (!b) return;
     for (const ed of [b.ed].filter(Boolean)) { const i = ed.blk.indexOf(b); if (i >= 0) ed.blk.splice(i, 1); }
@@ -875,7 +875,6 @@ class ParkSim {
     v.p = Math.atan2(f.z - r.z, Math.hypot(dx, dy));
   }
   ptAt(v, s) {
-    const o = this._pt || (this._pt = [{}, {}]);
     const out = s >= 0 || !v.prev ? v.edge.at(s, {}) : v.prev.at(v.prev.len + s, {});
     return out;
   }
