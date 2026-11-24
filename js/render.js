@@ -145,6 +145,7 @@ const Render = {
   },
   /** '#rgb' · '#rrggbb' · '#rrggbbaa' · 'rgb()' · 'rgba()' -> [r,g,b,a] (0~255). 같은 문자열은 다시 풀지 않는다 */
   color(str) {
+    if (!this.colCache) this.colCache = new Map();    // WebGL 없이도 색 풀이는 쓴다 (주차장 고정 메쉬 등)
     let c = this.colCache.get(str);
     if (c) return c;
     if (str[0] === '#') {
