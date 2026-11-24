@@ -238,6 +238,7 @@ const Render = {
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
     gl.disable(gl.CULL_FACE);
     const n = 0.25, F = 9000;
+    if (this.preFlush) this.preFlush(gl, n, F);      // 고정 메쉬(주차장 구조물 등)를 먼저 — 같은 깊이 버퍼를 쓴다
     const draw = (prog, b, withQ) => {
       if (!b.n) return;
       gl.useProgram(prog);
