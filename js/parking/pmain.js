@@ -107,6 +107,7 @@ const PApp = {
       this.simMs = (this.simMs || 0) * 0.9 + (performance.now() - t0) * 0.1;
       this.time += raw;
     }
+    if (this.tour) this.tourStep(raw);
     this.updateCam(raw);
     const t1 = performance.now();
     PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow' || this.mode === 'driver', hide: this.mode === 'driver' ? this.sel : null, heat: this.heat, guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
@@ -182,6 +183,7 @@ const PApp = {
       return { d: Math.hypot(a.x - b2.x, a.y - b2.y), x: (a.x + b2.x) / 2, y: (a.y + b2.y) / 2 };
     };
     cv.addEventListener('pointerdown', (e) => {
+      if (this.tour) this.toggleTour();               // 손으로 시점을 잡으면 자동 관람을 멈춘다
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       cv.setPointerCapture(e.pointerId);
       if (pts.size === 2) { pinch = pinchState(); drag = null; return; }
@@ -234,7 +236,8 @@ const PApp = {
       else if (k === 'PageDown' || k === '[' || k === 'q' || k === 'Q') this.setCut(this.cut - 1);
       else if (k >= '1' && k <= '5') this.setSpeed([1, 2, 5, 10, 30][+k - 1]);
       else if (k === 't' || k === 'T') this.setMode(this.mode === 'top' ? 'orbit' : 'top');
-      else if (k === 'f' || k === 'F') this.followRandom();
+      else if (k === 'f' || k === 'F') { if (this.tour) this.toggleTour(); this.followRandom(); }
+      else if (k === 'a' || k === 'A') this.toggleTour();
       else if (k === 'v' || k === 'V') this.setMode(this.mode === 'driver' ? 'follow' : 'driver');
       else if (k === 'h' || k === 'H') this.toggleHeat();
       else if (k === 'n' || k === 'N') this.toggleNight();
@@ -270,6 +273,50 @@ const PApp = {
     }
     this.sel = best;
     this.hud();
+  },
+  /** 자동 관람 — 볼 만한 장면(주차 조작 · 빈 자리 찾기 · 출차 · 승강기)을 골라 15 초 남짓씩 옮겨 다닌다 */
+  toggleTour() {
+    this.tour = !this.tour; this.tourT = 0; this.tourLast = null;
+    $('#bTour').classList.toggle('on', this.tour);
+    if (this.tour) this.toast('자동 관람 — 볼 만한 장면을 골라 옮겨 다닙니다 (화면을 끌거나 A 로 멈춤)', 3.5);
+    else this.toast('자동 관람을 멈췄습니다', 1.5);
+  },
+  tourStep(dt) {
+    const s = this.sel;
+    this.tourT -= dt;
+    // 따라가던 차가 주차를 마치거나 나가면 조금 더 보고 넘어간다
+    if (s && this.tourKind === 'car' && (s.mode === 'done' || (s.mode === 'parked' && !s.leaving)) && this.tourT > 2.5) this.tourT = 2.5;
+    if (s && this.tourKind === 'tower' && this.tourTower && this.tourTower.state === 'idle' && this.tourT > 2) this.tourT = 2;
+    if (this.tourT > 0 && s && s.mode !== 'done') return;
+    const G = this.G, sim = this.sim, C = [];
+    const add = (w, o) => { if (o.car !== this.tourLast) C.push(Object.assign({ w }, o)); };
+    if (G.mech) {
+      for (const T of G.towers) if (T.carOn && T.state !== 'idle') add(['lower', 'turn', 'board', 'push', 'up'].includes(T.state) ? 4 : 2, { kind: 'tower', T, car: T.carOn });
+      for (const v of sim.cars) if (v.mode === 'drive' && v.role === 'park' && v.edge && v.edge.kind === 'entry') add(0.6, { kind: 'car', car: v });
+    } else {
+      for (const v of sim.cars) {
+        if (v.mode === 'man') add(5, { kind: 'car', car: v });
+        else if (v.mode === 'drive' && v.plan) add(4, { kind: 'car', car: v });
+        else if (v.mode === 'drive' && v.inside && v.searching && !v.done) add(1.5, { kind: 'car', car: v });
+        else if (v.mode === 'drive' && v.inside && v.leaving && !v.done) add(1, { kind: 'car', car: v });
+      }
+      for (const p of sim.peds) if (p.toCar && p.car && p.k < p.pts.length - 2) add(0.5, { kind: 'car', car: p });
+    }
+    if (!C.length) for (const v of sim.cars) if (v.mode === 'drive' && v.role === 'park' && !v.done) add(1, { kind: 'car', car: v });   // 아직 안에 차가 없으면 들어오는 차
+    if (!C.length) { this.tourT = 1.5; return; }
+    let r = Math.random() * C.reduce((a, c) => a + c.w, 0), pick = C[0];
+    for (const c of C) { r -= c.w; if (r <= 0) { pick = c; break; } }
+    this.tourLast = pick.car; this.tourKind = pick.kind; this.tourTower = pick.T || null;
+    this.sel = pick.car;
+    if (pick.kind === 'tower') {
+      this.setMode('orbit');
+      Object.assign(this.cam, { tx: pick.T.x + 0.6, ty: 1.5, dist: 20 + Math.random() * 8, yaw: Math.PI / 2 + (Math.random() - 0.5) * 0.9, pitch: -0.32 });
+      this.cut = 0;
+      this.tourT = 16 + Math.random() * 6;
+    } else {
+      this.setMode('follow');
+      this.tourT = 13 + Math.random() * 6;
+    }
   },
   followRandom() {
     const c = this.sim.cars.filter((v) => (v.mode === 'drive' && v.inside) || v.mode === 'man');
@@ -313,7 +360,8 @@ const PApp = {
   bindUI() {
     $('#bPause').onclick = () => this.togglePause();
     for (const b of $$('[data-speed]')) b.onclick = () => this.setSpeed(+b.dataset.speed);
-    for (const b of $$('[data-mode]')) b.onclick = () => this.setMode(b.dataset.mode);
+    for (const b of $$('[data-mode]')) b.onclick = () => { if (this.tour) this.toggleTour(); this.setMode(b.dataset.mode); };
+    $('#bTour').onclick = () => this.toggleTour();
     $('#bUp').onclick = () => this.setCut(this.cut + 1);
     $('#bHeat').onclick = () => this.toggleHeat();
     $('#bNight').onclick = () => this.toggleNight();
