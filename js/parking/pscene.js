@@ -674,9 +674,10 @@ const PScene = {
       Render.mark(fxp, fyp, v.z + zT * 0.82, sz * 1.2, sz * 0.6, '#fff8e0');
       if (this.dark) Render.glow(fxp, fyp, v.z + zT * 0.82, sz * 4, '#fff4d0', '#fff4d044', 0.55);
     }
-    if (v.blink && (Math.floor((t + v.blinkPhase) * 1.7) & 1)) {
+    const bl = v.blink || (v.mode === 'drive' ? v.tblink : 0);
+    if (bl && (Math.floor((t + v.blinkPhase) * 1.7) & 1)) {
       for (const end of [1, -1]) {
-        const ex = v.x + ch * L * end * 0.98 - sh * v.wid * 0.5 * v.blink, ey = v.y + sh * L * end * 0.98 + ch * v.wid * 0.5 * v.blink;
+        const ex = v.x + ch * L * end * 0.98 - sh * v.wid * 0.5 * bl, ey = v.y + sh * L * end * 0.98 + ch * v.wid * 0.5 * bl;
         Render.mark(ex, ey, v.z + zT * 0.9, sz, sz * 0.7, '#ffa825');
         Render.glow(ex, ey, v.z + zT * 0.9, sz * 3, '#ffa825', '#ffa82544', 0.5);
       }

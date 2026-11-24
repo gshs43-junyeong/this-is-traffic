@@ -347,6 +347,21 @@ class ParkSim {
     if (v.mode !== 'drive') return;
     if (v.inside && !v.leaving && !v.giveUp) this.parkLogic(v, dt);
     this.pose(v);
+    // 갈림길에서 꺾기 전 방향지시등 (15 m 앞까지)
+    v.tbT = (v.tbT || 0) - dt;
+    if (v.tbT <= 0) {
+      v.tbT = 0.5; v.tblink = 0;
+      let d = v.edge.len - v.s;
+      for (let i = v.ri; i < v.route.length - 1 && d < 15; i++) {
+        const e = v.route[i], nx = v.route[i + 1];
+        if (e.to.outs.length > 1) {
+          const dh = wrapPi(nx.at(Math.min(5, nx.len)).h - e.h[e.n - 1]);
+          if (Math.abs(dh) > 0.6) v.tblink = Math.sign(dh);
+          break;
+        }
+        d += nx.len;
+      }
+    }
   }
   moveTo(v, nx) {
     const old = v.edge;
