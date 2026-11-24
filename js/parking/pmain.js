@@ -18,6 +18,13 @@ const PPRESETS = {
   mech: { kind: 'mech', W: 40, D: 52, U: 12, B: 0, inRate: 120, outRate: 100, initOcc: 0.6, label: '기계식 주차타워' },
 };
 
+/** 기계식 승강기 단계 → 고른 차 칸의 상태 글 */
+const MECH_STATE = {
+  in: '입고실로 들어가는 중', alight: '입고실 — 운전자가 내리는 중', up: '승강기가 칸 높이로 오르는 중', push: '칸으로 밀어 넣는 중', down: '입고 — 승강기 복귀',
+  fetch: '출고 — 승강기가 칸으로 가는 중', pull: '출고 — 칸에서 끌어내는 중', lower: '출고 — 1층으로 내려오는 중', turn: '출고 — 턴테이블이 차를 돌리는 중',
+  board: '출고 — 운전자가 타는 중', out: '출고 — 출구로', clear: '출고 — 출구로',
+};
+
 const PApp = {
   cfg: Object.assign({}, PCFG_DEFAULT),
   paused: false, speed: 1, time: 0, mode: 'orbit',
@@ -152,6 +159,13 @@ const PApp = {
     const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
     const x = c.tx - Math.cos(c.yaw) * cp * c.dist, y = c.ty - Math.sin(c.yaw) * cp * c.dist, z = c.tz - sp * c.dist;
     this.camPose = { x, y, z: Math.max(z, c.tz + 1.5), yaw: c.yaw, pitch: c.pitch };
+  },
+
+  /** 높이의 층 이름 — 기계식 탑 1층(입출고실 · 로비)은 칸 층이 아니다 */
+  lvName(z) {
+    const G = this.G;
+    if (G.towers && z < MK.ground - 0.6) return '1F (입출고실)';
+    return G.levels[PScene.lvAt(z)].name;
   },
 
   /* ---------- 입력 ---------- */
@@ -488,18 +502,21 @@ const PApp = {
     const v = this.sel, box = $('#selBox');
     if (v && v.pts) {
       box.style.display = 'block';
-      box.innerHTML = `<h3>운전자 (${v.car ? v.car.cls.name + ' #' + v.car.id : ''})</h3><div class="row"><span class="k">상태</span><span class="v">${v.delay > 0 ? '차에서 내리는 중' : v.toCar ? '차로 걸어가는 중' : '계단실로 걸어가는 중'}</span></div>` +
-        `<div class="row"><span class="k">층</span><span class="v">${G.levels[PScene.lvAt(v.z)].name}</span></div>` +
-        `<div class="row"><span class="k">걷는 속도</span><span class="v">${fmt1(v.sp * 3.6)} km/h</span></div><div class="hint">계단실에 닿으면 차 위로 돌아갑니다</div>`;
+      const mech = !!G.towers, at = v.k >= v.pts.length - 1;
+      const pst = v.delay > 0 ? '차에서 내리는 중' : v.hold ? (at ? '로비에서 차를 기다리는 중' : '로비로 걸어가는 중') : v.toCar ? '차로 걸어가는 중' : mech ? '밖으로 걸어 나가는 중' : '계단실로 걸어가는 중';
+      box.innerHTML = `<h3>운전자${v.car ? ' (' + v.car.cls.name + ' #' + v.car.id + ')' : ''}</h3><div class="row"><span class="k">상태</span><span class="v">${pst}</span></div>` +
+        `<div class="row"><span class="k">층</span><span class="v">${this.lvName(v.z)}</span></div>` +
+        `<div class="row"><span class="k">걷는 속도</span><span class="v">${fmt1(v.sp * 3.6)} km/h</span></div><div class="hint">${mech ? '차가 내려와 돌면 걸어가 탑니다' : '계단실에 닿으면 차 위로 돌아갑니다'}</div>`;
     } else if (v && v.mode !== 'done') {
       box.style.display = 'block';
-      const what = v.mode === 'parked' ? (v.leaving ? (v.driverAway ? '운전자가 차로 오는 중' : '출차 대기 (통로가 빌 때까지)') : '주차 중') :
-        v.mode === 'mech' ? (v.leaving ? '출고 중 (승강기 · 턴테이블)' : '입고 중 (승강기로 칸에 넣는 중)') :
+      const T = v.stall && v.stall.tower, qi = T ? T.q.indexOf(v) : -1;
+      const what = v.mode === 'parked' ? (v.leaving ? (qi >= 0 ? (qi === 0 && T.carOn !== v ? '출고 차례 — 승강기를 기다림' : `출고 대기 — 앞에 ${qi}대`) : T ? '운전자가 로비로 오는 중' : v.driverAway ? '운전자가 차로 오는 중' : '출차 대기 (통로가 빌 때까지)') : '주차 중') :
+        v.mode === 'mech' ? (MECH_STATE[T && T.state] || (v.leaving ? '출고 중' : '입고 중')) :
         v.mode === 'man' ? ({ revIn: '후면주차 중 (후진)', fwdIn: '전면주차 중', outFwd: '출차 — 앞으로 빠짐', outRev: '출차 — 후진으로 빠짐' }[v.man.kind]) :
           v.role === 'thru' ? '통과 차량' : v.done ? '나가는 중' : !v.inside ? (v.balk ? '대기열이 길어 지나감' : '입구로') :
             v.broken ? '고장 — 비상등 켜고 서 있음' : v.leaving ? '출구로' : v.giveUp ? '못 찾고 나감' : v.plan ? (v.plan.how === 'rev' ? '후면주차 준비' : '전면주차 준비') :
               v.waitFor ? '나가는 차를 기다림' : v.stall ? (v.guided ? '배정된 면으로' : '고른 면으로') : '빈 자리 찾는 중';
-      const lv = G.levels[PScene.lvAt(v.z)].name;
+      const lv = this.lvName(v.z);
       const tIn = v.tGate ? this.sim.time - v.tGate : 0;
       box.innerHTML = `<h3>${v.cls.name} #${v.id}</h3><div class="row"><span class="k">상태</span><span class="v">${what}</span></div>` +
         `<div class="row"><span class="k">층</span><span class="v">${lv}</span></div>` +
