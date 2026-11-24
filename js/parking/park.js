@@ -65,6 +65,7 @@ class ParkSim {
     this.pending = 0;
     this.st = { inN: 0, outN: 0, lost: 0, gaveUp: 0, search: [], exitT: [], queueT: [], hist: [] };
     this.histT = 0;
+    this.peds = [];
     this.prefill(cfg.initOcc);
   }
   /** 지금 n 대를 더 들여보낸다 (앞 도로에 차례로 나타난다) */
@@ -73,8 +74,7 @@ class ParkSim {
   addDepartures(n) {
     const cand = this.cars.filter((v) => v.mode === 'parked' && !v.leaving).sort((a, b) => a.tPark - b.tPark);
     let k = 0;
-    for (const v of cand) { if (k >= n) break; v.leaving = true; v.tReq = this.time; v.tryT = this.rng.range(0, 3); if (v.stall) v.stall.state = 'leave'; k++; }
-    this.actDirty = true;
+    for (const v of cand) { if (k >= n) break; this.callDriver(v); k++; }
     return k;
   }
   nextExp(rate) { return rate > 0 ? this.rng.exp(3600 / rate) : Infinity; }
@@ -132,7 +132,7 @@ class ParkSim {
       let pick = null;
       for (let t = 0; t < 30 && !pick; t++) { const v = this.cars[Math.floor(this.rng.next() * this.cars.length)]; if (ok(v)) pick = v; }
       if (!pick) { const cand = this.cars.filter(ok); if (cand.length) pick = this.rng.pick(cand); }
-      if (pick) { pick.leaving = true; pick.tReq = this.time; pick.tryT = 0; if (pick.stall) pick.stall.state = 'leave'; this.actDirty = true; }
+      if (pick) this.callDriver(pick);
     }
     // 움직이는 차만 돈다 — 세워 둔 차는 출차할 때까지 건드리지 않는다
     if (this.actDirty || !this.act) this.rebuildAct();
@@ -140,6 +140,7 @@ class ParkSim {
       if (v.mode === 'drive') this.drive(v, dt);
       else if (v.mode === 'man') this.maneuver(v, dt);
       else if (v.mode === 'parked' && v.leaving) {
+        if (v.driverAway) continue;          // 운전자가 아직 차로 걸어오는 중
         v.tryT -= dt;
         if (v.tryT <= 0) { v.tryT = 0.5; this.tryUnpark(v); }
         v.blink = (v.nose === 'out' ? 1 : -1) * v.stall.side * -1;
@@ -147,6 +148,7 @@ class ParkSim {
     }
     // 간선 위 차 정렬
     for (const ed of G.edges) if (ed.cars.length > 1) sortByS(ed.cars);
+    if (this.peds.length) this.walk(dt);
     // 기록
     this.histT += dt;
     if (this.histT >= 10) { this.histT = 0; this.record(); }
@@ -218,7 +220,7 @@ class ParkSim {
     for (const e of nd.outs) {
       if (e.kind === 'aisle' && !v.visited.has(e.id) && !v.seen.has('g' + e.id)) {
         v.seen.add('g' + e.id);
-        let free = 0; for (const s of e.stalls) if (s.state === 'free' || s.state === 'leave') free++;
+        let free = 0; for (const s of e.stalls) if (s.state === 'free' || (s.state === 'leave' && s.car && !s.car.driverAway)) free++;
         if (!free && rng.chance(0.75)) v.visited.add(e.id);
         else if (free) v.seen.add('f' + e.id);
       }
@@ -411,6 +413,15 @@ class ParkSim {
       ed = nx;
       if (base > look + 20) break;
     }
+    // 차 앞을 건너는 사람 — 차체 폭 + 0.6 m 안, 9 m 앞까지
+    if (this.peds.length && v.inside !== false) {
+      const ch = Math.cos(v.h), sh = Math.sin(v.h), fx = v.x + ch * v.len / 2, fy = v.y + sh * v.len / 2;
+      for (const p of this.peds) {
+        if (p.delay > 0 || Math.abs(p.z - v.z) > 1.3) continue;
+        const dx = p.x - fx, dy = p.y - fy, al = dx * ch + dy * sh, lt = -dx * sh + dy * ch;
+        if (al > -0.6 && al < 9 && Math.abs(lt) < v.wid / 2 + 0.6) obst(Math.max(0.1, al - 0.9), 0, p);
+      }
+    }
     v.why = why;
     if (curv < v0) v0 = curv;
     if (acc === Infinity) acc = idmAccel(v.v, v0, 1e4, 0, v.a, v.T, v.s0, v.sqrtAB);
@@ -567,7 +578,8 @@ class ParkSim {
       const d = s.s - v.s;
       if (d < 2 || d > 16) continue;
       if (v.seen.has(s.id)) continue;
-      if (s.state !== 'free' && !(s.state === 'leave' && !s.next)) continue;
+      // 나가려는 차는 운전자가 타서 깜빡이를 켰을 때만 '곧 빈다'로 보인다
+      if (s.state !== 'free' && !(s.state === 'leave' && !s.next && s.car && !s.car.driverAway)) continue;
       v.seen.add(s.id);
       if (!this.rng.chance(s.state === 'leave' ? 0.7 : 0.92)) continue;
       if (s.state === 'leave') {
@@ -753,6 +765,7 @@ class ParkSim {
       this.parkAt(v, s, M.kind === 'revIn' ? 'out' : 'in');
       v.tPark = this.time;
       v.searching = false;
+      this.spawnPed(v, false);                // 운전자가 내려 계단실로 걸어간다
       return;
     }
     // 출차 끝 — 통로 위 주행으로 넘긴다
@@ -816,6 +829,129 @@ class ParkSim {
     const o = this._pt || (this._pt = [{}, {}]);
     const out = s >= 0 || !v.prev ? v.edge.at(s, {}) : v.prev.at(v.prev.len + s, {});
     return out;
+  }
+
+  /* ---------- 사람 (운전자) ---------- */
+  /** 출차 — 운전자를 계단실에서 차로 걸어오게 한다. 도착해야 차가 움직인다 */
+  callDriver(v) {
+    v.leaving = true; v.tReq = this.time; v.tryT = 0;
+    if (v.stall) v.stall.state = 'leave';
+    v.driverAway = true;
+    if (!this.spawnPed(v, true)) { v.driverAway = false; v.tryT = this.rng.range(0, 3); }
+    this.actDirty = true;
+  }
+  spawnPed(v, toCar) {
+    const s = v.stall; if (!s) return null;
+    const pts = this.walkPath(v, s);
+    if (!pts) return null;
+    if (toCar) pts.reverse();
+    const rng = this.rng;
+    const p = {
+      pts, k: 0, u: 0, sp: rng.range(1.15, 1.5), z: s.z, car: v, toCar, level: s.level,
+      delay: toCar ? 0 : rng.range(2.5, 6), x: pts[0][0], y: pts[0][1], h: 0, ph: rng.next() * 6,
+      shirt: rng.pick(['#3b5b8c', '#8c3b3b', '#2f6b52', '#d0d0cc', '#2a2a2e', '#a07a3c', '#6b4f8c']),
+      pants: rng.pick(['#26282d', '#3a4256', '#6b6455', '#1f2a3a']), hei: rng.range(1.6, 1.82), wait: 0,
+    };
+    this.peds.push(p);
+    return p;
+  }
+  /** 차 문 -> 면 앞 통로 가장자리 -> 통로를 따라(양방향으로 걸을 수 있다) -> 계단실 문 */
+  walkPath(v, s) {
+    const G = this.G, L = s.level;
+    const ch = Math.cos(v.h), sh = Math.sin(v.h);
+    const door = [v.x - sh * (v.wid / 2 + 0.45), v.y + ch * (v.wid / 2 + 0.45)];     // 운전석(왼쪽)
+    const ent = [s.ox + s.nx * 2.2, s.oy + s.ny * 2.2];
+    if (!G.pedNet) G.pedNet = {};
+    let net = G.pedNet[L];
+    if (!net) {
+      const eds = G.edges.filter((e) => e.level === L && (e.kind === 'loop' || e.kind === 'aisle'));
+      const adj = new Map();
+      const add = (n, o) => { if (!adj.has(n.id)) adj.set(n.id, []); adj.get(n.id).push(o); };
+      for (const e of eds) { add(e.from, { e, fwd: true, to: e.to }); add(e.to, { e, fwd: false, to: e.from }); }
+      // 계단실 문에 가장 가까운 순환로 점
+      const cx = G.core.x - 2.5, cy = G.yt;
+      let best = null, bd = 1e9;
+      for (const e of eds) { const pr = e.project(cx, cy); if (pr.d < bd) { bd = pr.d; best = { e, s: pr.s }; } }
+      net = G.pedNet[L] = { adj, T: best };
+      if (!best) return null;
+    }
+    const T = net.T;
+    if (!T) return null;
+    // 다익스트라 (무향)
+    const dist = new Map(), prev = new Map();
+    const pq = [];
+    const push = (node, d, via) => { if (d < (dist.get(node.id) ?? Infinity)) { dist.set(node.id, d); prev.set(node.id, via); pq.push(node); } };
+    push(s.ed.from, s.s, { start: true, e: s.ed, a: s.s, b: 0 });
+    push(s.ed.to, s.ed.len - s.s, { start: true, e: s.ed, a: s.s, b: s.ed.len });
+    const done = new Set();
+    while (pq.length) {
+      let bi = 0; for (let i = 1; i < pq.length; i++) if (dist.get(pq[i].id) < dist.get(pq[bi].id)) bi = i;
+      const u = pq[bi]; pq[bi] = pq[pq.length - 1]; pq.pop();
+      if (done.has(u.id)) continue; done.add(u.id);
+      for (const o of net.adj.get(u.id) || []) push(o.to, dist.get(u.id) + o.e.len, { from: u, e: o.e, a: o.fwd ? 0 : o.e.len, b: o.fwd ? o.e.len : 0 });
+    }
+    // 목표 간선으로 들어가는 두 길 중 짧은 쪽
+    let pieces = null;
+    if (T.e === s.ed) pieces = [{ e: s.ed, a: s.s, b: T.s }];
+    else {
+      const dA = (dist.get(T.e.from.id) ?? Infinity) + T.s, dB = (dist.get(T.e.to.id) ?? Infinity) + (T.e.len - T.s);
+      if (!isFinite(Math.min(dA, dB))) return null;
+      const endNode = dA <= dB ? T.e.from : T.e.to;
+      pieces = [{ e: T.e, a: dA <= dB ? 0 : T.e.len, b: T.s }];
+      let n = endNode;
+      for (let g = 0; g < 200; g++) {
+        const via = prev.get(n.id); if (!via) break;
+        pieces.unshift({ e: via.e, a: via.a, b: via.b });
+        if (via.start) break;
+        n = via.from;
+      }
+    }
+    const pts = [door, ent];
+    for (const pc of pieces) {
+      const L2 = Math.abs(pc.b - pc.a), k = Math.max(1, Math.ceil(L2 / 1.5)), dir = Math.sign(pc.b - pc.a) || 1;
+      for (let i = 0; i <= k; i++) {
+        const q = pc.e.at(pc.a + (pc.b - pc.a) * i / k);
+        const off = 2.2 * dir;                     // 걷는 쪽의 오른편 가장자리
+        pts.push([q.x + Math.sin(q.h) * off, q.y - Math.cos(q.h) * off]);
+      }
+    }
+    pts.push([G.core.x, G.core.doorY - 1.5], [G.core.x, G.core.doorY]);
+    return pts;
+  }
+  walk(dt) {
+    let k = 0;
+    for (const p of this.peds) {
+      if (p.delay > 0) { p.delay -= dt; this.peds[k++] = p; continue; }
+      // 다가오는 차가 바로 앞이면 기다린다 (차 옆을 지날 때는 그냥 간다)
+      let hold = false;
+      if (p.k > 1) for (const c of this.act) {
+        if (c.mode !== 'drive' || c.v < 0.5 || Math.abs(c.z - p.z) > 1.3) continue;
+        const ch = Math.cos(c.h), sh = Math.sin(c.h), dx = p.x - c.x, dy = p.y - c.y;
+        const al = dx * ch + dy * sh, lt = -dx * sh + dy * ch;
+        if (al > 0 && al < c.len / 2 + 3 + c.v * 1.2 && Math.abs(lt) < c.wid / 2 + 0.7) { hold = true; break; }
+      }
+      p.wait = hold ? p.wait + dt : 0;
+      if (!hold || p.wait > 6) {
+        let d = p.sp * dt;
+        while (d > 0 && p.k < p.pts.length - 1) {
+          const a = p.pts[p.k], b = p.pts[p.k + 1];
+          const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          if (p.u + d < L) { p.u += d; d = 0; } else { d -= L - p.u; p.u = 0; p.k++; }
+        }
+        p.ph += dt * p.sp * 3.2;
+      }
+      if (p.k >= p.pts.length - 1) {
+        if (p.toCar && p.car) { p.car.driverAway = false; p.car.tryT = this.rng.range(2.5, 5); }
+        continue;                                   // 문에 닿았다 / 차에 탔다
+      }
+      const a = p.pts[p.k], b = p.pts[p.k + 1];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, t = p.u / L;
+      p.x = a[0] + (b[0] - a[0]) * t; p.y = a[1] + (b[1] - a[1]) * t;
+      const th = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      p.h = p.h + wrapPi(th - p.h) * Math.min(1, dt * 8);
+      this.peds[k++] = p;
+    }
+    this.peds.length = k;
   }
 
   /* ---------- 통계 ---------- */

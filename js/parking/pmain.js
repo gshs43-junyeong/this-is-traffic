@@ -339,7 +339,7 @@ const PApp = {
     const v = this.sel, box = $('#selBox');
     if (v && v.mode !== 'done') {
       box.style.display = 'block';
-      const what = v.mode === 'parked' ? (v.leaving ? '출차 대기 (통로가 빌 때까지)' : '주차 중') :
+      const what = v.mode === 'parked' ? (v.leaving ? (v.driverAway ? '운전자가 차로 오는 중' : '출차 대기 (통로가 빌 때까지)') : '주차 중') :
         v.mode === 'man' ? ({ revIn: '후면주차 중 (후진)', fwdIn: '전면주차 중', outFwd: '출차 — 앞으로 빠짐', outRev: '출차 — 후진으로 빠짐' }[v.man.kind]) :
           v.role === 'thru' ? '통과 차량' : v.done ? '나가는 중' : !v.inside ? (v.balk ? '대기열이 길어 지나감' : '입구로') :
             v.leaving ? '출구로' : v.giveUp ? '못 찾고 나감' : v.plan ? (v.plan.how === 'rev' ? '후면주차 준비' : '전면주차 준비') :

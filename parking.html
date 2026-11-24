@@ -121,7 +121,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
       <div class="row"><span class="k">출차 대기</span><span class="v" id="sQout">0</span></div>
       <div class="row"><span class="k">평균 입구 대기</span><span class="v" id="sQueue">—</span></div>
       <div class="row"><span class="k">평균 주차 소요 (차단기→주차)</span><span class="v" id="sSearch">—</span></div>
-      <div class="row"><span class="k">평균 출차 소요 (출발→출구)</span><span class="v" id="sExit">—</span></div>
+      <div class="row"><span class="k">평균 출차 소요 (호출→출구)</span><span class="v" id="sExit">—</span></div>
       <div class="row"><span class="k">입차 / 출차 누계</span><span class="v" id="sIO">0 / 0</span></div>
       <div class="row"><span class="k">지나감 / 포기</span><span class="v" id="sLost">0 / 0</span></div>
       <canvas id="chart" width="460" height="116"></canvas>
@@ -193,7 +193,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <ul><li>후면주차: 면을 지나쳐 멈춘 뒤 원호(반경 3.6~6 m)로 후진해 들어가며, 40 % 는 한 번 앞으로 갔다 다시 넣는다.</li>
         <li>전면주차: 감속하며 반경 4 m 로 바로 돌아 들어간다. 조작하는 동안 통로의 그 구간은 막힌다.</li>
         <li>출차는 통로가 비었을 때만 시작한다(뒤에서 오는 차의 정지거리까지 본다). 머리가 안쪽이면 후진으로 빠져나온다.</li>
-        <li>빈 자리를 찾던 차는 나가려는 차를 보면 기다렸다가 그 자리에 넣기도 한다.</li></ul>
+        <li>빈 자리를 찾던 차는 나가려는 차(운전자가 타고 깜빡이를 켠 차)를 보면 기다렸다가 그 자리에 넣기도 한다.</li>
+        <li>운전자는 주차 뒤 계단 · 승강기 동으로 걸어가고, 출차 때는 그곳에서 차까지 걸어와 탄다. 차는 앞을 건너는 사람 앞에서 선다.</li></ul>
         <h4>배치</h4>
         <ul><li>주차구획 2.5 × 5.0 m, 직각주차 차로 6.0 m, 경사로 일방 3.3 m · 종단경사 17 % 이하 · 시작과 끝 완화구간 (주차장법 시행규칙 제3조 · 제6조).</li>
         <li>층마다 일방통행 순환로. 오르는 경사로와 내려가는 경사로가 서쪽 칸에 나란히 있고, 한 층을 지나려면 그 층을 한 바퀴 돌아야 한다(분리형 경사로).</li>

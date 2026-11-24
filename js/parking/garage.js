@@ -334,6 +334,8 @@ function buildGarage(cfg) {
   G.sinks = new Set([nS1.id, nE1.id]);
 
   placeStalls(G);
+  // 계단 · 승강기 동 — 북쪽 벽 바깥, 동쪽 끝 통로 위 (모서리 근처는 주차면이 없어 걸어갈 틈이 있다)
+  G.core = { x: xf, x0: xf - 3.2, x1: xf + 3.2, y0: D, y1: D + 5.6, doorY: D - 0.5 };
   for (const ed of G.edges) ed.stalls.sort((a, b) => a.s - b.s);
   G.parkEdges = G.edges.filter((ed) => ed.stalls.length);
   // 통로 진행방향 화살표

@@ -180,6 +180,12 @@ const PScene = {
       A.box(W, 0, zb, W + t, D, -0.03, wc, true, true);
       A.quad([-t, -t, zb], [W + t, -t, zb], [W + t, D + t, zb], [-t, D + t, zb], '#3a3c3a');
     }
+    // 계단 · 승강기 동 (전 층을 꿰는 탑) — 층마다 문은 그 층 묶음에
+    {
+      const c = G.core, zb = G.levels[0].z - SL, zt = G.levels[G.NL - 1].z + (G.levels[G.NL - 1].under ? 0 : 3.4);
+      A.box(c.x0, c.y0 + 0.02, zb, c.x1, c.y1, zt, '#c9c3b4', false, false);
+      A.box(c.x0 - 0.1, c.y0 - 0.05, zt, c.x1 + 0.1, c.y1 + 0.1, zt + 0.25, '#a49e90', false, true);
+    }
     // 길 건너 건물 몇 채 (원경)
     const rng = new RNG('bld:' + (G.cfg.seed | 0));
     for (let x = -120; x < W + 120; x += rng.range(22, 34)) {
@@ -247,7 +253,10 @@ const PScene = {
       const southGaps = isG ? [[G.xx - 2.2, G.xe + 2.2]] : [];
       if (!plaza) {
         this.wallX(M, 0, W, t / 2, z, wallH, wc, covered, southGaps);
-        this.wallX(M, 0, W, D - t / 2, z, wallH, wc, covered, []);
+        this.wallX(M, 0, W, D - t / 2, z, wallH, wc, covered, [[G.core.x - 0.75, G.core.x + 0.75]]);
+        // 계단실 문 (북쪽 벽, 탑의 남쪽 면)
+        M.quad([G.core.x - 0.7, D - 0.005, z], [G.core.x + 0.7, D - 0.005, z], [G.core.x + 0.7, D - 0.005, z + 2.15], [G.core.x - 0.7, D - 0.005, z + 2.15], '#3d5a52');
+        M.quad([G.core.x - 0.35, D - 0.02, z + 2.25], [G.core.x + 0.35, D - 0.02, z + 2.25], [G.core.x + 0.35, D - 0.02, z + 2.5], [G.core.x - 0.35, D - 0.02, z + 2.5], '#2fbf62');
         M.box(0, 0, z, t, D, z + (L.under || covered ? H - SL : 1.1), wc, covered, true);
         M.box(W - t, 0, z, W, D, z + wallH, wc, covered, true);
         if (!L.under && covered) {            // 지상층 띠벽 (위층 슬래브 아래 차양)
@@ -498,6 +507,13 @@ const PScene = {
       this.lights(v, opt.time, dist);
       if (v === opt.sel && !opt.follow) this.selMark(v);
     }
+    // 사람 — 차에서 내려 계단실로, 출차할 때는 계단실에서 차로
+    for (const p of sim.peds) {
+      if (p.delay > 0 || p.z > zCut - 0.6) continue;
+      const dist = Render.depth(p.x, p.y, p.z);
+      if (dist < 0.5 || dist > 260) continue;
+      this.person(em, p, dist);
+    }
     // 세워 둔 차 중 나가려는 차 (깜빡이)
     for (const v of sim.cars) {
       if (v.mode !== 'parked' || !v.leaving || v.z > zCut) continue;
@@ -529,6 +545,30 @@ const PScene = {
       }
     }
     if (Render.gl) { Render.preFlush = (gl, n, F) => this.drawStatic(gl, n, F); Render.glFlush(); }
+  },
+  /** 회전한 상자 (윗면 + 네 옆면) */
+  obox(em, cx, cy, z0, h, hl, hw, hh, col) {
+    const c = Math.cos(h), s = Math.sin(h);
+    const P = (a, b, z) => [cx + c * a - s * b, cy + s * a + c * b, z];
+    const z1 = z0 + hh;
+    const f = (nx, ny, nz) => shade(col, faceLit(nx, ny, nz, true));
+    em.quad(P(-hl, -hw, z1), P(hl, -hw, z1), P(hl, hw, z1), P(-hl, hw, z1), f(0, 0, 1));
+    em.quad(P(hl, -hw, z0), P(hl, hw, z0), P(hl, hw, z1), P(hl, -hw, z1), f(c, s, 0));
+    em.quad(P(-hl, hw, z0), P(-hl, -hw, z0), P(-hl, -hw, z1), P(-hl, hw, z1), f(-c, -s, 0));
+    em.quad(P(-hl, hw, z0), P(hl, hw, z0), P(hl, hw, z1), P(-hl, hw, z1), f(-s, c, 0));
+    em.quad(P(hl, -hw, z0), P(-hl, -hw, z0), P(-hl, -hw, z1), P(hl, -hw, z1), f(s, -c, 0));
+  },
+  person(em, p, dist) {
+    const k = p.hei / 1.72, sw = Math.sin(p.ph) * 0.17, c = Math.cos(p.h), s = Math.sin(p.h);
+    const z = p.z + 0.01;
+    if (dist < 120) {
+      for (const sd of [-1, 1]) {      // 다리 — 걸음에 맞춰 앞뒤로
+        const off = sw * sd;
+        this.obox(em, p.x + c * off - s * 0.09 * sd, p.y + s * off + c * 0.09 * sd, z, p.h, 0.07, 0.065, 0.82 * k, p.pants);
+      }
+    } else this.obox(em, p.x, p.y, z, p.h, 0.08, 0.15, 0.82 * k, p.pants);
+    this.obox(em, p.x, p.y, z + 0.82 * k, p.h, 0.11, 0.2, 0.6 * k, p.shirt);
+    this.obox(em, p.x + c * 0.01, p.y + s * 0.01, z + 1.46 * k, p.h, 0.1, 0.09, 0.24 * k, '#d9b48f');
   },
   selMark(v) {
     const r = Math.max(v.len, 3) * 0.62;
