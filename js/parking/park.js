@@ -93,7 +93,7 @@ class ParkSim {
     v.z = s.z; v.p = 0;
     v.h = (nose === 'out' ? Math.atan2(-s.ny, -s.nx) : Math.atan2(s.ny, s.nx)) + j.range(-0.03, 0.03);
     v.blink = 0; v.brake = false; v.rev = false; v.inside = true;
-    this.dirty = true;
+    this.dirty = true; this.actDirty = true;
   }
 
   /* ---------- 진행 ---------- */
@@ -116,11 +116,16 @@ class ParkSim {
     // 출차 요청 — 세워 둔 차 하나를 고른다
     if (this.time >= this.tOut) {
       this.tOut = this.time + this.nextExp(cfg.outRate);
-      const cand = [];
-      for (const v of this.cars) if (v.mode === 'parked' && !v.leaving && this.time - v.tPark > 45) cand.push(v);
-      if (cand.length) { const v = this.rng.pick(cand); v.leaving = true; v.tReq = this.time; v.tryT = 0; if (v.stall) v.stall.state = 'leave'; }
+      // 무작위로 몇 번 뽑아 보고(수천 대를 매번 훑지 않게), 안 되면 전부 훑는다
+      const ok = (v) => v && v.mode === 'parked' && !v.leaving && this.time - v.tPark > 45;
+      let pick = null;
+      for (let t = 0; t < 30 && !pick; t++) { const v = this.cars[Math.floor(this.rng.next() * this.cars.length)]; if (ok(v)) pick = v; }
+      if (!pick) { const cand = this.cars.filter(ok); if (cand.length) pick = this.rng.pick(cand); }
+      if (pick) { pick.leaving = true; pick.tReq = this.time; pick.tryT = 0; if (pick.stall) pick.stall.state = 'leave'; this.actDirty = true; }
     }
-    for (const v of this.cars) {
+    // 움직이는 차만 돈다 — 세워 둔 차는 출차할 때까지 건드리지 않는다
+    if (this.actDirty || !this.act) this.rebuildAct();
+    for (const v of this.act) {
       if (v.mode === 'drive') this.drive(v, dt);
       else if (v.mode === 'man') this.maneuver(v, dt);
       else if (v.mode === 'parked' && v.leaving) {
@@ -129,16 +134,20 @@ class ParkSim {
         v.blink = (v.nose === 'out' ? 1 : -1) * v.stall.side * -1;
       }
     }
-    // 간선 위 차 정렬 · 퇴장
-    let k = 0;
-    for (const v of this.cars) if (v.mode !== 'done') this.cars[k++] = v;
-    this.cars.length = k;
+    // 간선 위 차 정렬
     for (const ed of G.edges) if (ed.cars.length > 1) sortByS(ed.cars);
     // 기록
     this.histT += dt;
     if (this.histT >= 10) { this.histT = 0; this.record(); }
   }
 
+  rebuildAct() {
+    let k = 0;
+    for (const v of this.cars) if (v.mode !== 'done') this.cars[k++] = v;
+    this.cars.length = k;
+    this.act = this.cars.filter((v) => v.mode === 'drive' || v.mode === 'man' || (v.mode === 'parked' && v.leaving));
+    this.actDirty = false;
+  }
   spawn(ed, role) {
     const last = ed.cars[0];
     if (last && last.s - last.len < 14) return false;
@@ -150,7 +159,7 @@ class ParkSim {
       v.tArr = this.time;
     }
     ed.cars.unshift(v);
-    this.cars.push(v);
+    this.cars.push(v); this.actDirty = true;
     this.planAhead(v);
     this.pose(v);
     return true;
@@ -303,7 +312,7 @@ class ParkSim {
   finish(v) {
     const i = v.edge.cars.indexOf(v); if (i >= 0) v.edge.cars.splice(i, 1);
     this.dropRes(v);
-    v.mode = 'done';
+    v.mode = 'done'; this.actDirty = true;
   }
 
   /** 앞을 훑어 가장 강한 감속 요인을 IDM 으로 낸다 */
@@ -492,13 +501,22 @@ class ParkSim {
   /** 유도 시스템 — 진입로 끝에서 가까운 빈 면 (같은 거리면 아래층 · 낮은 번호) */
   assign(v) {
     const G = this.G;
-    if (!G._dEnt) {
+    if (!G._dEnt) {        // 진입로 끝에서 모든 간선 시작점까지 — 다익스트라 한 번
       G._dEnt = new Map();
-      const from = G.entry.to;
-      for (const ed of G.parkEdges) {
-        const p = routeTo(G, from, ed, true);
-        G._dEnt.set(ed.id, p ? p.reduce((t, e) => t + e.len, 0) : 1e9);
+      const N = G.nodes.length, dist = new Float64Array(N).fill(Infinity), done = new Uint8Array(N);
+      const from = G.entry.to; dist[from.id] = 0;
+      const open = [from];
+      while (open.length) {
+        let bi = 0; for (let i = 1; i < open.length; i++) if (dist[open[i].id] < dist[open[bi].id]) bi = i;
+        const u = open[bi]; open[bi] = open[open.length - 1]; open.pop();
+        if (done[u.id]) continue; done[u.id] = 1;
+        for (const ed of u.outs) {
+          if (ed.kind === 'exit' || ed.kind === 'street') continue;
+          const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0);
+          if (dist[u.id] + w < dist[ed.to.id]) { dist[ed.to.id] = dist[u.id] + w; open.push(ed.to); }
+        }
       }
+      for (const ed of G.parkEdges) G._dEnt.set(ed.id, dist[ed.from.id]);
     }
     let best = null, bc = Infinity;
     for (const s of G.stalls) {
@@ -759,7 +777,7 @@ class ParkSim {
     if (s1 > ed.len - 1) for (const N of ed.to.outs) for (const c of N.cars) if (c.s - c.len < s1 - ed.len + 1) return false;
     if (ed.to.res && ed.to.res !== v && s1 > ed.len - 2) return false;
     // 이웃에서 조작 중인 차
-    for (const c of this.cars) {
+    for (const c of this.act) {
       if (c === v || c.mode !== 'man') continue;
       if (c.stall && c.stall.level === v.stall.level && Math.hypot(c.x - v.x, c.y - v.y) < 9) return false;
     }
