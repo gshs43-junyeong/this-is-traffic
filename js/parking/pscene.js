@@ -21,7 +21,8 @@ const SUN = (() => { const v = [-0.45, -0.62, 0.64]; const l = Math.hypot(...v);
 
 /** 면 밝기 — 열린 곳은 햇빛, 덮인 곳(지붕 아래)은 고르게 밝힌 실내 */
 function faceLit(nx, ny, nz, covered) {
-  if (covered) return 0.70 + 0.22 * Math.max(0, nz) + 0.06 * Math.abs(nx);
+  // covered: 0 열린 곳 · 1 지붕 아래 · 2 지하(바깥 빛 없이 형광등만 — 한 단계 어둡다)
+  if (covered) return (0.70 + 0.22 * Math.max(0, nz) + 0.06 * Math.abs(nx)) * (covered === 2 ? 0.8 : 1);
   const d = nx * SUN[0] + ny * SUN[1] + nz * SUN[2];
   return 0.52 + 0.26 * Math.max(0, nz) + 0.42 * Math.max(0, d);
 }
@@ -196,12 +197,12 @@ const PScene = {
     /* --- 층 --- */
     for (let i = 0; i < G.NL; i++) {
       const L = G.levels[i], z = L.z, M = part(i);
-      const covered = i < G.NL - 1 || L.under;
+      const covered = L.under ? 2 : i < G.NL - 1 ? 1 : 0;
       const plaza = topUnder && i === G.gIdx;
       const slabC = plaza ? PCOL.plaza : L.under ? PCOL.slabUnder : covered ? PCOL.slab : PCOL.slabRoof;
       const aisleC = plaza ? '#7b7a76' : L.under ? PCOL.aisleUnder : covered ? PCOL.aisle : PCOL.aisleRoof;
       const ft = faceLit(0, 0, 1, covered) / faceLit(0, 0, 1, true);
-      const top = shade(slabC, plaza ? 1 : (covered ? 1 : 1.05));
+      const top = shade(slabC, plaza ? 1 : covered === 2 ? 0.82 : covered ? 1 : 1.05);
       // 슬래브 — 경사로 구멍을 빼고 세 판
       const rects = [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
       for (const [x0, y0, x1, y1] of rects) {
@@ -380,7 +381,7 @@ const PScene = {
     const end = i + S;
     if (v) {
       const lv = this.G.levels[v.stall.level];
-      const covered = v.stall.level < this.G.NL - 1 || lv.under;
+      const covered = lv.under ? 2 : v.stall.level < this.G.NL - 1 ? 1 : 0;
       const em = {
         quad: (a, b, c, d, style) => {
           if (i + 6 > end) return;
@@ -495,7 +496,7 @@ const PScene = {
       const dist = Render.depth(v.x, v.y, v.z);
       if (dist < -6 || dist > 900) continue;
       const lv = this.lvAt(v.z);
-      const covered = lv < G.NL - 1 || G.levels[lv].under;
+      const covered = G.levels[lv].under ? 2 : lv < G.NL - 1 ? 1 : 0;
       // 그림자
       Render.layer = 3; ctx.globalAlpha = 0.35;
       const ch = Math.cos(v.h), sh = Math.sin(v.h), hl = v.len * 0.5, hw = v.wid * 0.5;
