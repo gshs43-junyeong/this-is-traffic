@@ -235,14 +235,14 @@ const PApp = {
       else if (k === 'PageUp' || k === ']' || k === 'e' || k === 'E') this.setCut(this.cut + 1);
       else if (k === 'PageDown' || k === '[' || k === 'q' || k === 'Q') this.setCut(this.cut - 1);
       else if (k >= '1' && k <= '5') this.setSpeed([1, 2, 5, 10, 30][+k - 1]);
-      else if (k === 't' || k === 'T') this.setMode(this.mode === 'top' ? 'orbit' : 'top');
+      else if (k === 't' || k === 'T') { if (this.tour) this.toggleTour(); this.setMode(this.mode === 'top' ? 'orbit' : 'top'); }
       else if (k === 'f' || k === 'F') { if (this.tour) this.toggleTour(); this.followRandom(); }
       else if (k === 'a' || k === 'A') this.toggleTour();
-      else if (k === 'v' || k === 'V') this.setMode(this.mode === 'driver' ? 'follow' : 'driver');
+      else if (k === 'v' || k === 'V') { if (this.tour) this.toggleTour(); this.setMode(this.mode === 'driver' ? 'follow' : 'driver'); }
       else if (k === 'h' || k === 'H') this.toggleHeat();
       else if (k === 'n' || k === 'N') this.toggleNight();
       else if (k === 'i' || k === 'I') this.incident();
-      else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { this.sel = null; this.setMode('orbit'); } }
+      else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { if (this.tour) this.toggleTour(); this.sel = null; this.setMode('orbit'); } }
       else if (k === 'p' || k === 'P') this.panel(!$('#panel').classList.contains('on'));
     });
   },
