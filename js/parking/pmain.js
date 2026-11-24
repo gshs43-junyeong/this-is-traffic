@@ -435,12 +435,12 @@ const PApp = {
     if (this.G.mech) {
       st('#kHunt', '가동 중인 승강기'); st('#kMan', '승강기 · 입고실의 차'); st('#kQin', '입고 대기 (진입로 · 도로)');
       st('#kQout', '출고 호출 대기'); st('#kSearch', '평균 입고 소요 (문 앞→칸)');
-      S.hunting = this.G.towers.filter((T) => T.state !== 'idle').length + ' / ' + this.G.towers.length;
+      st('#sHunt', this.G.towers.filter((T) => T.state !== 'idle').length + ' / ' + this.G.towers.length + ' 기');
     } else {
       st('#kHunt', '빈 자리 찾는 차'); st('#kMan', '주차 · 출차 조작 중'); st('#kQin', '입구 대기');
       st('#kQout', '출차 대기'); st('#kSearch', '평균 주차 소요 (차단기→주차)');
     }
-    st('#sHunt', S.hunting + (this.G.mech ? ' 기' : ' 대'));
+    if (!this.G.mech) st('#sHunt', S.hunting + ' 대');
     st('#sMan', S.man + ' 대');
     st('#sQin', S.qIn + ' 대' + (S.coming ? ` (+${S.coming} 오는 중)` : ''));
     st('#sQout', (S.qOut + S.wantOut) + ' 대');
