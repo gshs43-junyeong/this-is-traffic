@@ -295,6 +295,9 @@ PScene.mechFrame = function (A) {
     A.box(x0 - 0.06, y0, 0, x0 + 0.02, y1, top, NX(clad), false, true);
     A.box(x1 - 0.02, y0, 0, x1 + 0.06, y1, top, NX(clad), false, true);
     A.box(x0, y1 - 0.02, 0, x1, y1 + 0.06, top, NX(clad), false, true);
+    // 밤 — 로비 천장등과 몇 단마다 칸 안의 작업등
+    this.lamps.push([T.x + MK.bayW, y0 + 1.6, MK.ground - 0.45, 0]);
+    for (let i = 2; i < G.levels.length; i += 4) this.lamps.push([T.x, y0 + 0.4, G.levels[i].z + MK.pitch - 0.25, 0]);
     // 층마다 앞쪽 보 · 칸 팔레트
     for (const L of G.levels) {
       if (L.z < 0) continue;
