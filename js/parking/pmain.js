@@ -396,6 +396,7 @@ const PApp = {
 
   hud() {
     const S = this.sim.summary(), G = this.G;
+    this.lastS = S;
     // 층별 점유
     let h = '';
     for (let i = G.NL - 1; i >= 0; i--) {
@@ -524,12 +525,14 @@ const PApp = {
         }
       }
       // 입구 · 출구
-      for (const [ed, t] of [[G.gated.find((e) => e.kind === 'entry'), '입구'], [G.gated.find((e) => e.kind === 'exit'), '출구']]) {
+      // 입구 안내판 — 빈 자리 수 (찾는 차 몫은 뺀다) · 만차
+      const S = this.lastS || this.sim.summary(), freeN = Math.max(0, S.free - S.hunting);
+      for (const [ed, t] of [[G.gated.find((e) => e.kind === 'entry'), freeN ? `입구 · 빈 자리 ${freeN}` : '입구 · 만차'], [G.gated.find((e) => e.kind === 'exit'), '출구']]) {
         const q0 = ed.at(ed.gate.s - 6), q = Render.point(q0.x, q0.y, 2.6);
         if (!q) continue;
         ctx.fillStyle = '#10141bcc'; const w = ctx.measureText(t).width + 12;
         ctx.fillRect(q.x - w / 2, q.y - 10, w, 20);
-        ctx.fillStyle = t === '입구' ? '#7fe0a8' : '#ffc07a'; ctx.fillText(t, q.x, q.y);
+        ctx.fillStyle = t === '출구' ? '#ffc07a' : freeN ? '#7fe0a8' : '#ff6b5e'; ctx.fillText(t, q.x, q.y);
       }
     }
     // 비네트
