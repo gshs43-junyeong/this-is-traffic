@@ -164,8 +164,8 @@ const PScene = {
       A.quad([x, ys - 1.98, 0.02], [x + 6, ys - 1.98, 0.02], [x + 6, ys - 1.84, 0.02], [x, ys - 1.84, 0.02], PCOL.lineY);
     }
     // 진입로 · 진출로 포장 + 차단기 기둥
-    for (const ed of [G.entry, G.exit]) {
-      this.ribbon(A, ed, 0, ed.len, 1.75, 0.03, PCOL.asphalt, false, () => 0.03);
+    for (const ed of G.edges) if (ed.kind === 'entry' || ed.kind === 'exit') this.ribbon(A, ed, 0, ed.len, 1.75, 0.03, PCOL.asphalt, false, () => 0.03);
+    for (const ed of G.gated) {
       const q = ed.at(ed.gate.s);
       const nx = -Math.sin(q.h), ny = Math.cos(q.h);
       const bx = q.x - nx * 2.1, by = q.y - ny * 2.1;     // 진행방향 오른쪽 길가
@@ -251,7 +251,7 @@ const PScene = {
       // 바깥 벽 — 지하는 전고 옹벽, 지상은 난간벽
       const wallH = L.under ? H - SL : 1.1, wc = L.under ? PCOL.wallUnder : PCOL.wall, t = 0.22;
       const isG = i === G.gIdx;
-      const southGaps = isG ? [[G.xx - 2.2, G.xe + 2.2]] : [];
+      const southGaps = isG ? [[G.xx - 2.2 - (G.lanes === 2 ? 3.2 : 0), G.xe + 2.2 + (G.lanes === 2 ? 3.2 : 0)]] : [];
       if (!plaza) {
         this.wallX(M, 0, W, t / 2, z, wallH, wc, covered, southGaps);
         this.wallX(M, 0, W, D - t / 2, z, wallH, wc, covered, [[G.core.x - 0.75, G.core.x + 0.75]]);
@@ -523,7 +523,7 @@ const PScene = {
     }
     if (opt.sel && opt.sel.mode === 'parked' && !opt.sel.leaving) this.selMark(opt.sel);
     // 차단기 막대
-    for (const ed of [G.entry, G.exit]) {
+    for (const ed of G.gated) {
       const g = ed.gate;
       g.lift = approach(g.lift || 0, g.open ? 1 : 0, 0.35, opt.dt || 0.016);
       const q = ed.at(g.s), nx = -Math.sin(q.h), ny = Math.cos(q.h);

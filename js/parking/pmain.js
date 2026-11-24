@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7,
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1,
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -300,6 +300,7 @@ const PApp = {
     }
     $('#c_guide').checked = !!c.guide;
     $('#c_gate').value = c.gate;
+    $('#c_lanes').value = String(c.lanes || 1);
     this.est();
   },
   readPanel(all) {
@@ -311,6 +312,7 @@ const PApp = {
       const o = $('#v_' + k); if (o) o.textContent = this.fields[k][0](v);
     }
     c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value;
+    if (all) c.lanes = +$('#c_lanes').value;
     this.est();
     this.save();
   },
@@ -431,7 +433,7 @@ const PApp = {
         }
       }
       // 입구 · 출구
-      for (const [ed, t] of [[G.entry, '입구'], [G.exit, '출구']]) {
+      for (const [ed, t] of [[G.gated.find((e) => e.kind === 'entry'), '입구'], [G.gated.find((e) => e.kind === 'exit'), '출구']]) {
         const q0 = ed.at(ed.gate.s - 6), q = Render.point(q0.x, q0.y, 2.6);
         if (!q) continue;
         ctx.fillStyle = '#10141bcc'; const w = ctx.measureText(t).width + 12;

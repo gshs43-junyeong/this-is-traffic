@@ -319,13 +319,40 @@ function buildGarage(cfg) {
   const sC = addEdge('street', -1, p.X, p.Y, 0, null, () => 0, 12.5); link(sC, nSx, nS1);
   G.street = [sA, sB, sC];
   G.streetIn = sA; G.streetOut = sC;
-  p = filletPath([[xe + r, ys], [xe, ys], [xe, yb + r]], r);
-  const ent = addEdge('entry', gi, p.X, p.Y, 0, null, () => 0, 3.0); link(ent, nSe, lvN[gi].mE);
-  p = filletPath([[xx - r, yb], [xx, yb], [xx, ys], [xx - r, ys]], r);
-  const ext = addEdge('exit', gi, p.X, p.Y, 0, null, () => 0, 3.0); link(ext, lvN[gi].dX, nSx);
-  ent.gate = { s: ent.project(xe, gateY).s, kind: 'in', busy: null, t: 0, open: null, lift: 0 };
-  ext.gate = { s: ext.project(xx, gateY).s, kind: 'out', busy: null, t: 0, open: null, lift: 0 };
-  G.entry = ent; G.exit = ext;
+  const mkGate = (ed, x, kind) => { ed.gate = { s: ed.project(x, gateY).s, kind, busy: null, t: 0, open: null, lift: 0 }; };
+  const lanes = cfg.lanes === 2 ? 2 : 1;
+  G.lanes = lanes; G.gated = [];
+  const pE = filletPath([[xe + r, ys], [xe, ys], [xe, yb + r]], r);
+  const pX = filletPath([[xx - r, yb], [xx, yb], [xx, ys], [xx - r, ys]], r);
+  if (lanes === 1) {
+    const ent = addEdge('entry', gi, pE.X, pE.Y, 0, null, () => 0, 3.0); link(ent, nSe, lvN[gi].mE);
+    const ext = addEdge('exit', gi, pX.X, pX.Y, 0, null, () => 0, 3.0); link(ext, lvN[gi].dX, nSx);
+    mkGate(ent, xe, 'in'); mkGate(ext, xx, 'out');
+    G.entry = ent; G.exit = ext; G.entryEnd = ent.to;
+    G.gated.push(ent, ext);
+  } else {
+    /* 차단기 둘 — 차단기 앞에서 진입로가 두 갈래로 벌어졌다 다시 모인다(톨게이트처럼).
+       정산 시간이 출구 처리량을 정하므로 차로를 둘로 하면 처리량이 거의 두 배가 된다.
+       둘째 차로는 입구는 동쪽, 출구는 서쪽으로 3.2 m 벌린다(서로 겹치지 않게) */
+    const split = (P, x, ySp, yJn, dx, kind, n0, n1) => {
+      const L = polyLen(P.X, P.Y);
+      const sAt = (yy) => { let best = 0, bd = 1e9; let acc = 0; for (let i = 1; i < P.X.length; i++) { acc += Math.hypot(P.X[i] - P.X[i - 1], P.Y[i] - P.Y[i - 1]); const d = Math.abs(P.X[i] - x) + Math.abs(P.Y[i] - yy); if (d < bd) { bd = d; best = acc; } } return best; };
+      const s0 = sAt(ySp), s1 = sAt(yJn);
+      const ndS = node(x, ySp, 0, gi), ndJ = node(x, yJn, 0, gi);
+      const pre = addEdge(kind, gi, P.X, P.Y, 0, s0, () => 0, 3.0); link(pre, n0, ndS);
+      const l1 = addEdge(kind, gi, P.X, P.Y, s0, s1, () => 0, 3.0); link(l1, ndS, ndJ);
+      const sg = Math.sign(yJn - ySp);
+      const q = filletPath([[x, ySp], [x + dx, ySp + 3.5 * sg], [x + dx, yJn - 3.5 * sg], [x, yJn]], 4);
+      const l2 = addEdge(kind, gi, q.X, q.Y, 0, null, () => 0, 3.0); link(l2, ndS, ndJ);
+      const post = addEdge(kind, gi, P.X, P.Y, s1, L, () => 0, 3.0); link(post, ndJ, n1);
+      mkGate(l1, x, kind === 'entry' ? 'in' : 'out'); mkGate(l2, x + dx, kind === 'entry' ? 'in' : 'out');
+      G.gated.push(l1, l2);
+      return { pre, l1, l2, post };
+    };
+    const E = split(pE, xe, gateY - 5.5, gateY + 5, 3.2, 'entry', nSe, lvN[gi].mE);
+    const X = split(pX, xx, gateY + 5, gateY - 5.5, -3.2, 'exit', lvN[gi].dX, nSx);
+    G.entry = E.l1; G.exit = X.pre; G.entryEnd = E.post.to;
+  }
   // 반대 차로 (통과 교통만, 주차장과 무관)
   p = filletPath([[xL, ys - 3.3], [xR, ys - 3.3]], r, 1);
   const eb = addEdge('street', -1, p.X, p.Y, 0, null, () => 0, 12.5);

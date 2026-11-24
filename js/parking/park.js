@@ -198,6 +198,12 @@ class ParkSim {
   choose(v, nd) {
     const outs = nd.outs;
     if (outs.length === 1) return outs[0];
+    // 차단기 차로가 둘이면 줄이 짧은 쪽으로
+    if (outs.every((e) => e.gate)) {
+      let best = outs[0], bc = Infinity;
+      for (const e of outs) { const c = e.cars.length + (e.gate.busy ? 1 : 0) + this.rng.next() * 0.5; if (c < bc) { bc = c; best = e; } }
+      return best;
+    }
     if (v.role === 'thru' || v.done) return outs.find((e) => e.kind === 'street') || outs[0];
     if (v.path && v.path.length) {
       if (v.path[0].from === nd) return v.path.shift();
@@ -327,6 +333,8 @@ class ParkSim {
   moveTo(v, nx) {
     const old = v.edge;
     const i = old.cars.indexOf(v); if (i >= 0) old.cars.splice(i, 1);
+    // 차단기 차로가 짧으면 꽁무니가 차단기를 지나기 전에 다음 간선으로 넘어간다 — 그때 닫는다
+    if (old.gate && old.gate.open === v) { old.gate.open = null; old.gate.close = 1; }
     v.prev = old;
     v.edge = nx; v.ri++;
     nx.cars.push(v);
@@ -541,7 +549,7 @@ class ParkSim {
     if (!G._dEnt) {        // 진입로 끝에서 모든 간선 시작점까지 — 다익스트라 한 번
       G._dEnt = new Map();
       const N = G.nodes.length, dist = new Float64Array(N).fill(Infinity), done = new Uint8Array(N);
-      const from = G.entry.to; dist[from.id] = 0;
+      const from = G.entryEnd; dist[from.id] = 0;
       const open = [from];
       while (open.length) {
         let bi = 0; for (let i = 1; i < open.length; i++) if (dist[open[i].id] < dist[open[bi].id]) bi = i;
