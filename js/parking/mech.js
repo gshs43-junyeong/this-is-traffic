@@ -298,9 +298,18 @@ PScene.mechFrame = function (A) {
 };
 
 /** 승강기 바닥 — 매 프레임 (PScene.draw 에서) */
-PScene.mechLifts = function (em) {
+PScene.mechLifts = function (em, dt) {
   for (const T of this.sim.G.towers) {
     const z = T.liftZ || 0;
     this.obox(em, T.x, T.cy, z, Math.PI / 2, 2.85, 1.08, 0.16, '#d4b13a');
+    // 입고실 셔터 — 차가 드나들 때만 열린다 (올라가 접힌다)
+    const head = T.lin.cars.reduce((a, c) => (!a || c.s > a.s ? c : a), null);
+    const want = T.state === 'in' || T.state === 'out' || T.state === 'clear' || (T.state === 'idle' && head && T.lin.len - head.s < 3) ? 1 : 0;
+    T.door = approach(T.door || 0, want, 0.5, dt || 0.016);
+    const h = (MK.ground - 0.4) * (1 - T.door), x0 = T.x - 1.15, x1 = T.x + 1.15, y = 0.12;
+    if (h > 0.05) {
+      em.quad([x0, y, MK.ground - 0.4 - h], [x1, y, MK.ground - 0.4 - h], [x1, y, MK.ground - 0.4], [x0, y, MK.ground - 0.4], NX('#9aa3ab'));
+      for (let k = 0.25; k < h; k += 0.25) em.quad([x0, y - 0.01, MK.ground - 0.4 - k], [x1, y - 0.01, MK.ground - 0.4 - k], [x1, y - 0.01, MK.ground - 0.38 - k], [x0, y - 0.01, MK.ground - 0.38 - k], NX('#7d868e'));
+    }
   }
 };

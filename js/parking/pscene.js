@@ -563,7 +563,7 @@ const PScene = {
       this.lights(v, opt.time, dist);
       if (v === opt.sel && !opt.follow) this.selMark(v);
     }
-    if (G.mech) this.mechLifts(em);
+    if (G.mech) this.mechLifts(em, opt.dt);
     // 사람 — 차에서 내려 계단실로, 출차할 때는 계단실에서 차로
     for (const p of sim.peds) {
       if (p.delay > 0 || p.z > zCut - 0.6) continue;
