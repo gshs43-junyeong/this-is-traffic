@@ -427,7 +427,11 @@ const PApp = {
     const q = (a, f) => { if (!a.length) return '—'; const b = a.slice().sort((x, y) => x - y); return mmss(b[Math.min(b.length - 1, Math.floor(b.length * f))]); };
     const draw = () => {
       let h = '<tr style="color:#8d96a8"><th style="text-align:left">설정</th><th>입차</th><th>출차</th><th>주차 소요 중앙 · 90%</th><th>출차 소요 중앙 · 90%</th><th>입구 대기 최대</th><th>지나감 · 포기</th></tr>';
-      for (const r of rows) h += `<tr${r.base ? ' style="color:#7fe0a8"' : ''}><td>${r.name}</td><td style="text-align:right">${r.inN}</td><td style="text-align:right">${r.outN}</td><td style="text-align:right">${r.park}</td><td style="text-align:right">${r.exit}</td><td style="text-align:right">${r.qMax} 대</td><td style="text-align:right">${r.lost} · ${r.gaveUp}</td></tr>`;
+      // 열마다 가장 나은 값은 굵게 (두 줄 넘게 끝났을 때)
+      const best = {};
+      if (rows.length > 1) for (const c of ['inN', 'outN', 'park', 'exit', 'qMax', 'lost']) best[c] = Math.min(...rows.map((r) => r.k[c]));
+      const td = (r, c, txt) => `<td style="text-align:right${rows.length > 1 && r.k[c] === best[c] ? ';font-weight:700;color:#fff' : ''}">${txt}</td>`;
+      for (const r of rows) h += `<tr${r.base ? ' style="color:#7fe0a8"' : ''}><td>${r.name}</td>${td(r, 'inN', r.inN)}${td(r, 'outN', r.outN)}${td(r, 'park', r.park)}${td(r, 'exit', r.exit)}${td(r, 'qMax', r.qMax + ' 대')}${td(r, 'lost', r.lost + ' · ' + r.gaveUp)}</tr>`;
       $('#pvTable').innerHTML = h;
     };
     const work = () => {
@@ -440,7 +444,9 @@ const PApp = {
       $('#pvMsg').textContent = `계산 중 — ${vi + 1}/${V.length} · ${Math.round(t / DUR * 100)}%`;
       if (t >= DUR) {
         const st = sim.st;
-        rows.push({ name: V[vi][0], base: vi === 0, inN: st.inN, outN: st.outN, park: q(st.search, 0.5) + ' · ' + q(st.search, 0.9), exit: q(st.exitT, 0.5) + ' · ' + q(st.exitT, 0.9), qMax, lost: st.lost, gaveUp: st.gaveUp });
+        const med = (a) => { if (!a.length) return Infinity; const b = a.slice().sort((x, y) => x - y); return b[b.length >> 1]; };
+        rows.push({ name: V[vi][0], base: vi === 0, inN: st.inN, outN: st.outN, park: q(st.search, 0.5) + ' · ' + q(st.search, 0.9), exit: q(st.exitT, 0.5) + ' · ' + q(st.exitT, 0.9), qMax, lost: st.lost, gaveUp: st.gaveUp,
+          k: { inN: -st.inN, outN: -st.outN, park: med(st.search), exit: med(st.exitT), qMax, lost: st.lost + st.gaveUp } });
         draw(); next();
       }
       if (this.pv && this.pvRun === run) setTimeout(work, 0);
