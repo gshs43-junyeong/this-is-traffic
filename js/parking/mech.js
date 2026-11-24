@@ -113,13 +113,13 @@ class MechSim extends ParkSim {
     if (!v.towerPick) {
       let best = null, bc = Infinity;
       for (const T of this.G.towers) {
-        if (!T.lin.from || T.lin.from.ins.length === 0) continue;
         const free = this.G.stalls.some((s) => s.tower === T && s.state === 'free');
         if (!free) continue;
         const c = T.lin.cars.length * 1.0 + T.q.length * 0.8 + (T.state !== 'idle' ? 0.5 : 0) + this.rng.next() * 0.3;
         if (c < bc) { bc = c; best = T; }
       }
       v.towerPick = best || 'none';
+      if (!best) { v.balk = true; this.st.lost++; }       // 빈 칸이 있는 탑이 없다 — 지나간다
     }
     const ent = outs.find((e) => e.kind === 'entry');
     if (ent && v.towerPick === ent.tower) return ent;
