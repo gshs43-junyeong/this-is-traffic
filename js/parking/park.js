@@ -1053,6 +1053,10 @@ class ParkSim {
         p.ph += dt * p.sp * 3.2;
       }
       if (p.k >= p.pts.length - 1) {
+        if (p.hold) {                                // 기다리는 사람 — 끝점에 서 있다 (기계식 로비)
+          const e = p.pts[p.pts.length - 1]; p.x = e[0]; p.y = e[1]; p.ph = 0;
+          this.peds[k++] = p; continue;
+        }
         if (p.toCar && p.car) { p.car.driverAway = false; p.car.tryT = this.rng.range(2.5, 5); }
         p.gone = true;
         if (this.onPedEnd) this.onPedEnd(p);

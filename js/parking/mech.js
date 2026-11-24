@@ -129,8 +129,16 @@ class MechSim extends ParkSim {
     if (!v.stall) return;
     v.leaving = true; v.tReq = this.time; v.driverAway = true;
     v.stall.state = 'leave';
-    v.stall.tower.q.push(v);
+    const T = v.stall.tower;
+    T.q.push(v);
     this.actDirty = true;
+    // 운전자가 보도에서 로비로 와서 기다린다 — 차가 내려와 돌면 걸어가 탄다
+    const n = T.q.length - 1, spot = [T.x + 2.0 + (n % 3) * 0.55, 1.6 + Math.floor(n / 3) * 0.7 % 3.2];
+    const pts = [[T.x + 9, PK.ys + 4.4], [T.x + 4.2, PK.ys + 4.4], [T.x + 2.9, -2.5], [T.x + 2.9, 0.6], spot];
+    const p = { pts, k: 0, u: 0, sp: this.rng.range(1.15, 1.5), z: 0, car: null, toCar: false, level: 0, delay: 0, x: pts[0][0], y: pts[0][1], h: 0, ph: 0,
+      shirt: this.rng.pick(['#3b5b8c', '#8c3b3b', '#2f6b52', '#d0d0cc', '#2a2a2e', '#a07a3c']), pants: '#3a4256', hei: this.rng.range(1.6, 1.82), wait: 0, hold: true };
+    this.peds.push(p);
+    v.mechPed = p;
   }
   admit() { return this.G.stalls.some((s) => s.state === 'free'); }
   sub(dt) {
@@ -204,11 +212,21 @@ class MechSim extends ParkSim {
         break;
       case 'lower':
         T.liftZ = lerp(T.slot.z - 0.18, 0, ease); v.z = T.liftZ + 0.18;
-        if (f >= 1) { T.liftZ = 0; go('turn', MK.tTurn); this.walkIn(T, v); }
+        if (f >= 1) { T.liftZ = 0; go('turn', MK.tTurn); }
         break;
       case 'turn':
         v.h = Math.PI / 2 + Math.PI * ease;
-        if (f >= 1) go('board', this.rng.range(6, 10));
+        if (f >= 1) {
+          let walkT = 0;
+          const p = v.mechPed;
+          if (p && this.peds.includes(p)) {          // 로비에서 기다리던 운전자가 차로 간다
+            const tgt = [T.x + 1.15, T.cy + 0.4];
+            p.hold = false; p.pts = [[p.x, p.y], [T.x + 1.3, 1.0], tgt]; p.k = 0; p.u = 0; p.delay = 0;
+            walkT = (Math.hypot(T.x + 1.3 - p.x, 1.0 - p.y) + Math.hypot(tgt[0] - T.x - 1.3, tgt[1] - 1.0)) / p.sp;
+          }
+          v.mechPed = null;
+          go('board', walkT + this.rng.range(4, 7));
+        }
         break;
       case 'board':
         if (f >= 1) { T.p1 = { x: T.x - 1.4, y: -0.6 - v.len / 2 }; go('out', 3.5); v.driverAway = false; }
@@ -290,6 +308,17 @@ PScene.mechFrame = function (A) {
     A.quad([x0, y0, 0.02], [x1, y0, 0.02], [x1, y1, 0.02], [x0, y1, 0.02], '#6b7078');
     A.box(x0, y0 - 0.15, MK.ground - 0.35, x1, y0 + 0.05, MK.ground, NX('#2f4f6f'), false, false);
     A.quad([T.x - 0.9, y0 - 0.17, MK.ground - 0.3], [T.x + 0.9, y0 - 0.17, MK.ground - 0.3], [T.x + 0.9, y0 - 0.17, MK.ground - 0.05], [T.x - 0.9, y0 - 0.17, MK.ground - 0.05], '#3ec46d');
+    // 1층 동쪽 칸은 대기 로비 (유리 앞벽 · 의자), 서쪽 칸은 기계실
+    const lx0 = T.x + MK.bayW / 2 + 0.15, lx1 = x1 - 0.1, mz = MK.ground - 0.4;
+    A.quad([lx0, y0 + 0.1, 0.03], [lx1, y0 + 0.1, 0.03], [lx1, y1 - 0.1, 0.03], [lx0, y1 - 0.1, 0.03], '#cdc7b6');
+    A.box(lx0, y0 + 0.05, 0, lx1, y0 + 0.12, 0.35, NX('#8b939c'), false, true);
+    A.box(lx0 + 0.75, y0 + 0.06, 0.35, lx1, y0 + 0.1, mz, PNIGHT ? '#e8d9a6' : '#7fa4b8', false, true);     // 유리 (문 자리 비움)
+    A.box(lx0 + 0.15, y1 - 0.7, 0, lx1 - 0.15, y1 - 0.3, 0.45, '#6b5a48', true, false);                    // 의자
+    A.box(lx1 - 0.5, y0 + 2.0, 0, lx1 - 0.1, y0 + 2.5, 1.3, '#3b4654', true, false);                       // 정산기
+    A.box(lx1 - 0.48, y0 + 2.05, 0.9, lx1 - 0.44, y0 + 2.45, 1.2, '#7fd1ff', true, true);
+    const mx0 = x0 + 0.1, mx1 = T.x - MK.bayW / 2 - 0.15;
+    A.box(mx0, y0 + 0.05, 0, mx1, y1 - 0.1, mz, NX('#a7aca8'), false, false);                             // 기계실
+    A.quad([mx0 + 0.6, y0 + 0.03, 0], [mx0 + 1.5, y0 + 0.03, 0], [mx0 + 1.5, y0 + 0.03, 2.0], [mx0 + 0.6, y0 + 0.03, 2.0], '#5c6670');
     // 지붕
     A.box(x0 - 0.15, y0 - 0.15, top, x1 + 0.15, y1 + 0.15, top + 0.3, NX('#9aa0a6'), false, false);
     // 승강기 레일 (가운데 열 앞쪽)
