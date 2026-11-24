@@ -74,6 +74,9 @@ const PApp = {
     const asp = (this.cv.clientHeight || 1) / (this.cv.clientWidth || 1);
     this.cam.dist = clamp((Math.hypot(G.W, G.D) * 1.05 + G.NL * 3) * Math.max(1, asp * 0.95), 60, 420);
     this.fillPanel();
+    // 기계식에는 통로가 없어 열지도 · 고장 차가 뜻이 없다
+    for (const id of ['#bHeat', '#bInc']) { const b = $(id); if (b) { b.disabled = !!this.G.mech; b.style.opacity = this.G.mech ? 0.35 : 1; } }
+    if (this.G.mech && this.heat) this.toggleHeat();
     const S = this.sim.summary();
     this.toast(`${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · 경사로 최대 ${fmt1(G.grade * 100)}%`, 4);
     this.updMode();
