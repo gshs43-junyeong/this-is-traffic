@@ -261,16 +261,11 @@ class MechSim extends ParkSim {
     }
     return best;
   }
-  /** 운전자 — 입고실에서 내려 보도로 / 보도에서 입고실로 */
+  /** 운전자 — 입고실에서 내려 로비 문으로 나가 보도로 (출고 때는 callDriver 가 로비로 불러 세운다) */
   walkOut(T, v) {
-    const pts = [[T.x + 1.15, T.cy - 0.6], [T.x + 2.9, 0.3], [T.x + 2.9, -2.5], [T.x + 4.2, PK.ys + 4.4], [T.x + 9, PK.ys + 4.4]];
+    const pts = [[T.x + 1.15, T.cy - 0.6], [T.x + 1.75, 0.7], [T.x + 1.75, -2.5], [T.x + 4.2, PK.ys + 4.4], [T.x + 9, PK.ys + 4.4]];   // 로비 유리벽 서쪽 끝의 문으로
     this.peds.push({ pts, k: 0, u: 0, sp: this.rng.range(1.15, 1.5), z: 0, car: v, toCar: false, level: 0, delay: this.rng.range(2, 4), x: pts[0][0], y: pts[0][1], h: 0, ph: 0,
       shirt: this.rng.pick(['#3b5b8c', '#8c3b3b', '#2f6b52', '#d0d0cc', '#2a2a2e']), pants: '#26282d', hei: this.rng.range(1.6, 1.82), wait: 0 });
-  }
-  walkIn(T, v) {
-    const pts = [[T.x + 9, PK.ys + 4.4], [T.x + 4.2, PK.ys + 4.4], [T.x + 2.9, -2.5], [T.x + 2.9, 0.3], [T.x + 1.15, T.cy - 0.6]];
-    this.peds.push({ pts, k: 0, u: 0, sp: this.rng.range(1.2, 1.5), z: 0, car: null, toCar: false, level: 0, delay: 0, x: pts[0][0], y: pts[0][1], h: 0, ph: 0,
-      shirt: this.rng.pick(['#3b5b8c', '#8c3b3b', '#2f6b52', '#d0d0cc', '#2a2a2e']), pants: '#3a4256', hei: this.rng.range(1.6, 1.82), wait: 0 });
   }
   summary() {
     const S = super.summary();
