@@ -51,7 +51,7 @@ const PApp = {
     if (c.U + c.B < 1) c.U = 1;
     this.G = buildGarage(c);
     this.sim = new ParkSim(this.G, c);
-    PScene.init(this.G, this.sim);
+    PScene.init(this.G, this.sim, this.night);
     // 따라가던 차가 주차를 마치면 내린 운전자를 따라 계단실까지 간다
     this.sim.onPed = (p) => { if (this.sel === p.car && !p.toCar && (this.mode === 'follow' || this.mode === 'driver')) { this.sel = p; if (this.mode === 'driver') this.setMode('follow'); } };
     this.sim.onPedEnd = (p) => { if (this.sel === p) { this.sel = p.car; if (!p.toCar) this.setMode('orbit'); } };
@@ -209,6 +209,7 @@ const PApp = {
       else if (k === 'f' || k === 'F') this.followRandom();
       else if (k === 'v' || k === 'V') this.setMode(this.mode === 'driver' ? 'follow' : 'driver');
       else if (k === 'h' || k === 'H') this.toggleHeat();
+      else if (k === 'n' || k === 'N') this.toggleNight();
       else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { this.sel = null; this.setMode('orbit'); } }
       else if (k === 'p' || k === 'P') this.panel(!$('#panel').classList.contains('on'));
     });
@@ -256,6 +257,14 @@ const PApp = {
   },
   updMode() { for (const b of $$('[data-mode]')) b.classList.toggle('on', b.dataset.mode === this.mode); },
   setCut(c) { this.cut = clamp(c, 0, this.G.NL - 1); if (this.mode === 'follow') this.setMode('orbit'); this.hud(); },
+  /** 주간 · 야간 — 바깥 색이 구워진 고정 메쉬를 다시 짓는다 (큰 주차장은 1 초 남짓) */
+  toggleNight() {
+    this.night = !this.night;
+    PScene.init(this.G, this.sim, this.night);
+    if (Render.gl) PScene.uploaded = false;
+    $('#bNight').classList.toggle('on', this.night);
+    $('#bNight').textContent = this.night ? '야간' : '주간';
+  },
   toggleHeat() {
     this.heat = !this.heat; $('#bHeat').classList.toggle('on', this.heat);
     if (this.heat) this.toast('탐색 열지도 — 빈 자리를 찾는 차가 오래 머문 통로일수록 붉다 (보이는 층)', 3.5);
@@ -270,6 +279,7 @@ const PApp = {
     for (const b of $$('[data-mode]')) b.onclick = () => this.setMode(b.dataset.mode);
     $('#bUp').onclick = () => this.setCut(this.cut + 1);
     $('#bHeat').onclick = () => this.toggleHeat();
+    $('#bNight').onclick = () => this.toggleNight();
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
     $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };

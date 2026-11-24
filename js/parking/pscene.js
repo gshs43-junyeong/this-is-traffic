@@ -20,9 +20,13 @@ const PCOL = {
 const SUN = (() => { const v = [-0.45, -0.62, 0.64]; const l = Math.hypot(...v); return v.map((x) => x / l); })();
 
 /** 면 밝기 — 열린 곳은 햇빛, 덮인 곳(지붕 아래)은 고르게 밝힌 실내 */
+let PNIGHT = false;          // 야간 — 바깥면만 어둡다 (실내는 형광등)
+/** 바깥 색을 밤 색으로 */
+const NX = (c) => (PNIGHT ? shade(mixHex(c, '#1d2a44', 0.3), 0.36) : c);
 function faceLit(nx, ny, nz, covered) {
   // covered: 0 열린 곳 · 1 지붕 아래 · 2 지하(바깥 빛 없이 형광등만 — 한 단계 어둡다)
   if (covered) return (0.70 + 0.22 * Math.max(0, nz) + 0.06 * Math.abs(nx)) * (covered === 2 ? 0.8 : 1);
+  if (PNIGHT) return 0.30 + 0.06 * Math.max(0, nz);
   const d = nx * SUN[0] + ny * SUN[1] + nz * SUN[2];
   return 0.52 + 0.26 * Math.max(0, nz) + 0.42 * Math.max(0, d);
 }
@@ -131,8 +135,8 @@ class MeshB {
 }
 
 const PScene = {
-  init(G, sim) {
-    this.G = G; this.sim = sim;
+  init(G, sim, night) {
+    this.G = G; this.sim = sim; PNIGHT = !!night;
     this.buildStatic();
     this.buildSlots();
     this.uploaded = false;
@@ -151,26 +155,42 @@ const PScene = {
     const A = part(-1);
     const gz = -0.02, big = 260;
     const topUnder = G.U === 0;        // 지상 주차가 없으면 G 층 자체가 광장(지면)
-    A.quad([-big, D, gz], [W + big, D, gz], [W + big, D + big, gz], [-big, D + big, gz], PCOL.ground);
-    A.quad([-big, -big, gz], [W + big, -big, gz], [W + big, 0, gz], [-big, 0, gz], PCOL.ground);
-    A.quad([-big, 0, gz], [0, 0, gz], [0, D, gz], [-big, D, gz], PCOL.ground);
-    A.quad([W, 0, gz], [W + big, 0, gz], [W + big, D, gz], [W, D, gz], PCOL.ground);
+    A.quad([-big, D, gz], [W + big, D, gz], [W + big, D + big, gz], [-big, D + big, gz], NX(PCOL.ground));
+    A.quad([-big, -big, gz], [W + big, -big, gz], [W + big, 0, gz], [-big, 0, gz], NX(PCOL.ground));
+    A.quad([-big, 0, gz], [0, 0, gz], [0, D, gz], [-big, D, gz], NX(PCOL.ground));
+    A.quad([W, 0, gz], [W + big, 0, gz], [W + big, D, gz], [W, D, gz], NX(PCOL.ground));
     const ys = PK.ys;
-    A.quad([-big, ys - 5.0, 0.0], [W + big, ys - 5.0, 0.0], [W + big, ys + 1.75, 0.0], [-big, ys + 1.75, 0.0], PCOL.asphalt);
-    A.quad([-big, ys + 1.75, 0.01], [W + big, ys + 1.75, 0.01], [W + big, -0.3, 0.01], [-big, -0.3, 0.01], PCOL.pave);
-    A.quad([-big, ys - 9.0, 0.01], [W + big, ys - 9.0, 0.01], [W + big, ys - 5.0, 0.01], [-big, ys - 5.0, 0.01], PCOL.pave);
+    A.quad([-big, ys - 5.0, 0.0], [W + big, ys - 5.0, 0.0], [W + big, ys + 1.75, 0.0], [-big, ys + 1.75, 0.0], NX(PCOL.asphalt));
+    A.quad([-big, ys + 1.75, 0.01], [W + big, ys + 1.75, 0.01], [W + big, -0.3, 0.01], [-big, -0.3, 0.01], NX(PCOL.pave));
+    A.quad([-big, ys - 9.0, 0.01], [W + big, ys - 9.0, 0.01], [W + big, ys - 5.0, 0.01], [-big, ys - 5.0, 0.01], NX(PCOL.pave));
     for (let x = -big; x < W + big; x += 6) {    // 중앙선 (황색 실선 둘) · 차로 끝 백색
-      A.quad([x, ys - 1.76, 0.02], [x + 6, ys - 1.76, 0.02], [x + 6, ys - 1.62, 0.02], [x, ys - 1.62, 0.02], PCOL.lineY);
-      A.quad([x, ys - 1.98, 0.02], [x + 6, ys - 1.98, 0.02], [x + 6, ys - 1.84, 0.02], [x, ys - 1.84, 0.02], PCOL.lineY);
+      A.quad([x, ys - 1.76, 0.02], [x + 6, ys - 1.76, 0.02], [x + 6, ys - 1.62, 0.02], [x, ys - 1.62, 0.02], NX(PCOL.lineY));
+      A.quad([x, ys - 1.98, 0.02], [x + 6, ys - 1.98, 0.02], [x + 6, ys - 1.84, 0.02], [x, ys - 1.84, 0.02], NX(PCOL.lineY));
     }
     // 진입로 · 진출로 포장 + 차단기 기둥
-    for (const ed of G.edges) if (ed.kind === 'entry' || ed.kind === 'exit') this.ribbon(A, ed, 0, ed.len, 1.75, 0.03, PCOL.asphalt, false, () => 0.03);
+    for (const ed of G.edges) if (ed.kind === 'entry' || ed.kind === 'exit') this.ribbon(A, ed, 0, ed.len, 1.75, 0.03, NX(PCOL.asphalt), false, () => 0.03);
     for (const ed of G.gated) {
       const q = ed.at(ed.gate.s);
       const nx = -Math.sin(q.h), ny = Math.cos(q.h);
       const bx = q.x - nx * 2.1, by = q.y - ny * 2.1;     // 진행방향 오른쪽 길가
       A.box(bx - 0.35, by - 0.35, 0, bx + 0.35, by + 0.35, 1.15, '#d7d2c4', false, true);
       A.box(bx - 0.18, by - 0.18, 1.15, bx + 0.18, by + 0.18, 1.3, '#e0a43a', false, true);
+    }
+    // 가로등 (도로 북쪽 보도) — 불빛은 밤에 draw() 에서
+    this.lamps = [];
+    for (let x = -100; x < W + 100; x += 28) {
+      if (x > G.xx - 9 && x < G.xe + 9) continue;        // 진입로 앞은 비운다
+      A.box(x - 0.09, ys + 2.6, 0, x + 0.09, ys + 2.78, 7.5, NX('#5b6066'), false, true);
+      A.box(x - 0.09, ys + 1.0, 7.4, x + 0.09, ys + 2.78, 7.55, NX('#5b6066'), false, true);
+      this.lamps.push([x, ys + 1.1, 7.35, 0]);
+    }
+    // 옥상 조명주 — 지상 맨 위층이 지붕 없는 주차장일 때
+    const topL = G.levels[G.NL - 1];
+    if (!topL.under && topL.park) {
+      for (let x = PK.RW + 6; x < W - 2; x += 16) for (const y of [0.45, D - 0.45]) {
+        A.box(x - 0.1, y - 0.1, topL.z, x + 0.1, y + 0.1, topL.z + 6, NX('#6b7076'), false, true);
+        this.lamps.push([x, y + (y < 1 ? 0.6 : -0.6), topL.z + 5.9, G.NL - 1]);
+      }
     }
     // 지하 옹벽 — 숨긴 지하층 사이로 하늘이 비치지 않게 땅속 구덩이 벽은 늘 그린다
     if (G.B > 0) {
@@ -185,6 +205,7 @@ const PScene = {
     {
       const c = G.core, zb = G.levels[0].z - SL, zt = G.levels[G.NL - 1].z + (G.levels[G.NL - 1].under ? 0 : 3.4);
       A.box(c.x0, c.y0 + 0.02, zb, c.x1, c.y1, zt, '#c9c3b4', false, false);
+      if (PNIGHT) for (let i = 0; i < G.NL; i++) if (!G.levels[i].under) A.quad([c.x0 + 1.2, c.y1 + 0.02, G.levels[i].z + 1.0], [c.x1 - 1.2, c.y1 + 0.02, G.levels[i].z + 1.0], [c.x1 - 1.2, c.y1 + 0.02, G.levels[i].z + 2.4], [c.x0 + 1.2, c.y1 + 0.02, G.levels[i].z + 2.4], '#efe3b6');
       A.box(c.x0 - 0.1, c.y0 - 0.05, zt, c.x1 + 0.1, c.y1 + 0.1, zt + 0.25, '#a49e90', false, true);
     }
     // 길 건너 건물 몇 채 (원경)
@@ -193,6 +214,16 @@ const PScene = {
       const w = rng.range(14, 24), d = rng.range(14, 22), h = rng.range(9, 38);
       const y0 = ys - 13 - d;
       A.box(x, y0, 0, x + w, y0 + d, h, rng.pick(['#b9b4a8', '#a7aab0', '#c4b9a6', '#9aa3a8']), false, true);
+      // 길 쪽 면의 창 — 밤에는 군데군데 불이 켜진다
+      for (let fz = 1.2; fz < h - 1.5; fz += 3.2) for (let fx = x + 1.2; fx < x + w - 1.6; fx += 2.6) {
+        // ★ 건물 배치 난수(rng)를 여기서 뽑으면 주야를 바꿀 때 건물 모양이 달라진다 — 창은 자리 해시로
+        const hh = ihash(Math.round(fx * 7.3 + fz * 131.7 + x * 17.1));
+        const lit = PNIGHT && hh < 0.38;
+        const wc = lit ? ['#f3d58c', '#e8e2c8', '#f6c070'][Math.floor(hh * 7.9) % 3] : NX('#5d6a78');
+        A.quad([fx, y0 + d + 0.05, fz], [fx + 1.4, y0 + d + 0.05, fz], [fx + 1.4, y0 + d + 0.05, fz + 1.3], [fx, y0 + d + 0.05, fz + 1.3], wc);
+        const lit2 = PNIGHT && ihash(Math.round(fx * 3.1 + fz * 57.3 + x * 5.7)) < 0.34;
+        A.quad([fx, y0 - 0.05, fz], [fx + 1.4, y0 - 0.05, fz], [fx + 1.4, y0 - 0.05, fz + 1.3], [fx, y0 - 0.05, fz + 1.3], lit2 ? '#f0d28a' : NX('#5d6a78'));
+      }
     }
     /* --- 층 --- */
     for (let i = 0; i < G.NL; i++) {
@@ -202,7 +233,7 @@ const PScene = {
       const slabC = plaza ? PCOL.plaza : L.under ? PCOL.slabUnder : covered ? PCOL.slab : PCOL.slabRoof;
       const aisleC = plaza ? '#7b7a76' : L.under ? PCOL.aisleUnder : covered ? PCOL.aisle : PCOL.aisleRoof;
       const ft = faceLit(0, 0, 1, covered) / faceLit(0, 0, 1, true);
-      const top = shade(slabC, plaza ? 1 : covered === 2 ? 0.82 : covered ? 1 : 1.05);
+      const top = covered ? shade(slabC, covered === 2 ? 0.82 : 1) : NX(shade(slabC, plaza ? 1 : 1.05));
       // 슬래브 — 경사로 구멍을 빼고 세 판
       const rects = [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
       for (const [x0, y0, x1, y1] of rects) {
@@ -581,6 +612,14 @@ const PScene = {
         Render.mark(s.cx - s.nx * 2.3, s.cy - s.ny * 2.3, s.z + G.H - 0.55, 5, 5, ok ? '#38e07a' : s.state === 'res' ? '#f0c040' : '#ff4433');
       }
     }
+    if (PNIGHT) {
+      for (const [x, y, z, lv] of this.lamps) {
+        if (lv > opt.cut) continue;
+        Render.mark(x, y, z, 6, 3, '#fff2cc');
+        Render.glow(x, y, z - 0.1, 70 * Render.H / 900, '#ffe9b0', '#ffe9b044', 0.55);
+      }
+    }
+    this.dark = PNIGHT;
     if (Render.gl) { Render.preFlush = (gl, n, F) => this.drawStatic(gl, n, F); Render.glFlush(); }
   },
   /** 회전한 상자 (윗면 + 네 옆면) */
@@ -654,8 +693,8 @@ const PScene = {
       return;
     }
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#6f9ccc'); g.addColorStop(0.55, '#c6d6e4'); g.addColorStop(1, '#d9e0e4');
+    if (PNIGHT) { g.addColorStop(0, '#04070f'); g.addColorStop(0.6, '#0d1628'); g.addColorStop(1, '#1a2336'); this.fogCol = [0.07, 0.09, 0.14]; }
+    else { g.addColorStop(0, '#6f9ccc'); g.addColorStop(0.55, '#c6d6e4'); g.addColorStop(1, '#d9e0e4'); this.fogCol = [0.78, 0.84, 0.89]; }
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    this.fogCol = [0.78, 0.84, 0.89];
   },
 };
