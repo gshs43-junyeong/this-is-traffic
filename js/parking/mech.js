@@ -134,7 +134,7 @@ class MechSim extends ParkSim {
     this.actDirty = true;
     // 운전자가 보도에서 로비로 와서 기다린다 — 차가 내려와 돌면 걸어가 탄다
     const n = T.q.length - 1, spot = [T.x + 2.0 + (n % 3) * 0.55, 1.6 + Math.floor(n / 3) * 0.7 % 3.2];
-    const pts = [[T.x + 9, PK.ys + 4.4], [T.x + 4.2, PK.ys + 4.4], [T.x + 2.9, -2.5], [T.x + 2.9, 0.6], spot];
+    const pts = [[T.x + 9, PK.ys + 4.4], [T.x + 4.2, PK.ys + 4.4], [T.x + 1.75, -2.5], [T.x + 1.75, 0.7], spot]       // 유리벽 서쪽 끝의 문으로;
     const p = { pts, k: 0, u: 0, sp: this.rng.range(1.15, 1.5), z: 0, car: null, toCar: false, level: 0, delay: 0, x: pts[0][0], y: pts[0][1], h: 0, ph: 0,
       shirt: this.rng.pick(['#3b5b8c', '#8c3b3b', '#2f6b52', '#d0d0cc', '#2a2a2e', '#a07a3c']), pants: '#3a4256', hei: this.rng.range(1.6, 1.82), wait: 0, hold: true };
     this.peds.push(p);
@@ -221,7 +221,7 @@ class MechSim extends ParkSim {
           const p = v.mechPed;
           if (p && this.peds.includes(p)) {          // 로비에서 기다리던 운전자가 차로 간다
             const tgt = [T.x + 1.15, T.cy + 0.4];
-            p.hold = false; p.pts = [[p.x, p.y], [T.x + 1.3, 1.0], tgt]; p.k = 0; p.u = 0; p.delay = 0;
+            p.hold = false; p.toCar = true; p.car = v; p.pts = [[p.x, p.y], [T.x + 1.3, 1.0], tgt]; p.k = 0; p.u = 0; p.delay = 0;
             walkT = (Math.hypot(T.x + 1.3 - p.x, 1.0 - p.y) + Math.hypot(tgt[0] - T.x - 1.3, tgt[1] - 1.0)) / p.sp;
           }
           v.mechPed = null;
