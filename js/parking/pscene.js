@@ -564,6 +564,27 @@ const PScene = {
       if (v === opt.sel && !opt.follow) this.selMark(v);
     }
     if (G.mech) this.mechLifts(em, opt.dt);
+    // 선택한 차의 앞으로 갈 길 (80 m) — 바닥에 가는 하늘색 띠
+    const sv = opt.sel;
+    if (sv && sv.mode === 'drive' && sv.route && !opt.follow) {
+      Render.layer = 2; ctx.globalAlpha = 0.8;
+      let left = 80, first = true;
+      for (let i = sv.ri; i < sv.route.length && left > 0; i++) {
+        const e = sv.route[i], s0 = first ? sv.s : 0, s1 = Math.min(e.len, s0 + left);
+        first = false;
+        for (let s = s0; s < s1 - 0.2; s += 1.5) {
+          const a = e.at(s), b = e.at(Math.min(s1, s + 1.5)), w = 0.16;
+          const na = [-Math.sin(a.h) * w, Math.cos(a.h) * w], nb = [-Math.sin(b.h) * w, Math.cos(b.h) * w];
+          Render.begin();
+          Render.add(a.x - na[0], a.y - na[1], a.z + 0.06); Render.add(b.x - nb[0], b.y - nb[1], b.z + 0.06);
+          Render.add(b.x + nb[0], b.y + nb[1], b.z + 0.06); Render.add(a.x + na[0], a.y + na[1], a.z + 0.06);
+          Render.fill('#5fd0ff');
+        }
+        left -= s1 - s0;
+      }
+      if (sv.stall && sv.stall.cx != null) Render.mark(sv.stall.cx, sv.stall.cy, sv.stall.z + 0.5, 10, 10, '#5fd0ff');   // 고른 · 배정된 면
+      ctx.globalAlpha = 1; Render.layer = 0;
+    }
     // 사람 — 차에서 내려 계단실로, 출차할 때는 계단실에서 차로
     for (const p of sim.peds) {
       if (p.delay > 0 || p.z > zCut - 0.6) continue;
