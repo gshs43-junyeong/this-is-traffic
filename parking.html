@@ -87,6 +87,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 .chk input{width:16px;height:16px;accent-color:var(--acc)}
 .chk label{margin:0}
 .presets{display:flex;flex-wrap:wrap;gap:8px}
+#demWarn{font-size:12.5px;color:#ffd9a8;background:#241a10;border:1px solid #4a3418;border-radius:8px;padding:10px 12px;margin-top:12px;display:none}
+#demWarn.on{display:block}
 #estOut{font-size:12.5px;color:#b9e8cf;background:#12201a;border:1px solid #24402f;border-radius:8px;padding:10px 12px;margin-top:12px}
 .doc{font-size:12.5px;line-height:1.75;color:#b9c1d0}
 .doc h4{font-size:13.5px;color:var(--ink);margin:14px 0 5px}
@@ -192,6 +194,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="fld"><label>앞 도로 통과 교통 <span class="val" id="v_thruRate"></span></label><input type="range" id="c_thruRate" min="0" max="900" step="20"><div class="hint">입구 대기열이 도로로 넘치면 통과 차도 막힌다.</div></div>
         <div class="fld"><label>지나치는 대기열 길이 <span class="val" id="v_balk"></span></label><input type="range" id="c_balk" min="2" max="20" step="1"><div class="hint">입구 앞 대기 차가 이만큼이면 새로 온 차는 들어가지 않고 지나간다.</div></div>
       </div>
+      <div id="demWarn"></div>
       <div class="sect">운영</div>
       <div class="grid">
         <div class="fld"><div class="chk"><input type="checkbox" id="c_guide"><label for="c_guide">주차 유도 시스템 (빈 면 배정 · 면 표시등)</label></div><div class="hint">끄면 운전자가 통로를 돌며 빈 면을 직접 찾는다 — 층을 다 보면 다음 층으로.</div></div>

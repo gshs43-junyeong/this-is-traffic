@@ -386,6 +386,7 @@ const PApp = {
     }
     for (const id of ['guide', 'gate', 'pattern']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
     $('#c_kind').addEventListener('change', () => { this.est(); this.dimFields(); });
+    for (const id of ['#c_gate', '#c_lanes']) $(id).addEventListener('change', () => this.demWarn());
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
     this.setSpeed(1);
   },
@@ -540,6 +541,9 @@ const PApp = {
       if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
     }
     // 규모 칸의 이름 · 설명도 형식에 맞춘다
+    $('#c_kind').closest('.fld').querySelector('.hint').textContent = mech
+      ? '기계식은 가로 9.4 m 마다 탑 1기, 지상 층수 = 칸 단수(층마다 좌우 2칸), 지하 = 피트 단수. 세로는 쓰지 않는다.'
+      : '자주식은 서쪽 칸에 오르내리는 경사로, 층마다 일방통행 순환로와 직각주차 통로를 둔다.';
     const H = {
       W: ['가로 (동서)', mech ? '탑 1 기가 9.4 m — 가로가 길수록 탑이 늘어 승강기가 많아진다.' : '서쪽 7.6 m 는 경사로 칸. 통로 하나가 양쪽 주차열과 함께 16 m 를 쓴다.'],
       U: [mech ? '칸 단수 (지상)' : '지상 층수', mech ? '1 층은 입출고실 · 대기 로비, 그 위로 단마다 좌우 2 칸.' : '1층이 입구층. 0 이면 지면은 광장이고 주차는 지하에만.'],
@@ -552,8 +556,29 @@ const PApp = {
       if (val) val.textContent = this.fields[k][0](+$('#c_' + k).value);
     }
   },
+  /** 수요가 처리량을 넘으면 미리 알린다 — 처리량은 이 모형에서 잰 값 (README 의 측정) */
+  demWarn() {
+    const v = (id) => +$('#' + id).value;
+    const inR = v('c_inRate'), outR = v('c_outRate'), mech = $('#c_kind').value === 'mech';
+    const W = [];
+    if (mech) {
+      const nT = Math.max(1, Math.floor((Math.max(12, v('c_W')) - 7.2) / MK.space) + 1), U = Math.max(1, v('c_U'));
+      const avgZ = MK.ground + MK.pitch * (U - 1) / 2;
+      const per = Math.round(3600 / (40 + 1.25 * avgZ)), cap = per * nT;          // 탑 하나가 한 시간에 넣고 빼는 대수 (잰 값에 맞춘 근사)
+      if (inR + outR > cap * 0.85) W.push(`입고 + 출고 ${inR + outR}대/시가 승강기 처리량(탑 ${nT}기 × 약 ${per}대/시 = ${cap}대/시)에 ${inR + outR > cap ? '넘칩니다' : '가깝습니다'} — 진입로 대기와 출고 대기가 길어지고, 줄이 넘치면 지나가는 차가 생깁니다. 가로를 늘려 탑을 더하면 줄어듭니다.`);
+    } else {
+      const lpr = $('#c_gate').value === 'lpr', two = +$('#c_lanes').value >= 2;
+      const exitCap = lpr ? (two ? 420 : 400) : (two ? 195 : 165);
+      if (outR > exitCap * 0.9) W.push(`나가는 차 ${outR}대/시가 출구 처리량(${lpr ? '번호판 인식' : '주차권 정산'} · 차단기 ${two ? 2 : 1}차로 약 ${exitCap}대/시)에 ${outR > exitCap ? '넘칩니다' : '가깝습니다'} — 출구 대기열이 안쪽 통로로 번져 들어오는 차까지 막습니다.${lpr ? '' : ' 번호판 인식으로 바꾸면 두 배 남짓이 됩니다.'}`);
+      if (inR > 300) W.push(`들어오는 차 ${inR}대/시 — 입구 바로 뒤 통로에서 주차하는 차가 길을 막아, 이 모형에서는 시간당 210~320대쯤에서 진입로에 줄이 섭니다. 병목이 차단기가 아니라 입구 뒤 통로라 차단기를 두 차로로 늘려도 거의 그대로입니다.`);
+    }
+    const el = $('#demWarn');
+    el.innerHTML = W.map((w) => '⚠ ' + w).join('<br>');
+    el.classList.toggle('on', W.length > 0);
+  },
   /** 설정 창의 규모 미리 셈 — 짓기 전에 면 수를 알려 준다 */
   est() {
+    this.demWarn();
     const W = +$('#c_W').value, D = +$('#c_D').value, U = +$('#c_U').value, B = +$('#c_B').value;
     try {
       if ($('#c_kind').value === 'mech') {
