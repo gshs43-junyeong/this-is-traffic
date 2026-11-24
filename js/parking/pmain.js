@@ -57,7 +57,9 @@ const PApp = {
     this.sel = null; this.mode = 'orbit';
     const G = this.G;
     this.cam.tx = G.W / 2; this.cam.ty = G.D / 2 - 4; this.cam.tz = G.levels[this.cut].z;
-    this.cam.dist = clamp(Math.hypot(G.W, G.D) * 1.05 + G.NL * 3, 60, 320);
+    // 세로 화면(휴대폰)에서는 가로 시야가 좁아 더 물러선다
+    const asp = (this.cv.clientHeight || 1) / (this.cv.clientWidth || 1);
+    this.cam.dist = clamp((Math.hypot(G.W, G.D) * 1.05 + G.NL * 3) * Math.max(1, asp * 0.95), 60, 420);
     this.fillPanel();
     const S = this.sim.summary();
     this.toast(`${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · 경사로 최대 ${fmt1(G.grade * 100)}%`, 4);
@@ -130,11 +132,32 @@ const PApp = {
     const cv = this.cv;
     let drag = null;
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
+    // 두 손가락: 벌리고 오므려 확대 · 함께 밀어 이동
+    const pts = new Map();
+    let pinch = null;
+    const pinchState = () => {
+      const [a, b2] = [...pts.values()];
+      return { d: Math.hypot(a.x - b2.x, a.y - b2.y), x: (a.x + b2.x) / 2, y: (a.y + b2.y) / 2 };
+    };
     cv.addEventListener('pointerdown', (e) => {
-      drag = { x: e.clientX, y: e.clientY, b: e.button, sx: e.clientX, sy: e.clientY, pan: e.button === 2 || e.shiftKey };
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       cv.setPointerCapture(e.pointerId);
+      if (pts.size === 2) { pinch = pinchState(); drag = null; return; }
+      drag = { x: e.clientX, y: e.clientY, b: e.button, sx: e.clientX, sy: e.clientY, pan: e.button === 2 || e.shiftKey };
     });
+    const lift = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+    cv.addEventListener('pointercancel', (e) => { lift(e); drag = null; });
     cv.addEventListener('pointermove', (e) => {
+      if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size === 2) {
+        const q = pinchState(), c = this.cam;
+        if (q.d > 10 && pinch.d > 10) c.dist = clamp(c.dist * pinch.d / q.d, 12, 420);
+        const k = c.dist / 650, dx = q.x - pinch.x, dy = q.y - pinch.y;
+        c.tx += (-Math.sin(c.yaw) * dx + Math.cos(c.yaw) * dy) * k;
+        c.ty += (Math.cos(c.yaw) * dx + Math.sin(c.yaw) * dy) * k;
+        pinch = q;
+        return;
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       drag.x = e.clientX; drag.y = e.clientY;
@@ -153,6 +176,7 @@ const PApp = {
       }
     });
     cv.addEventListener('pointerup', (e) => {
+      lift(e);
       if (drag && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5 && drag.b === 0) this.pick(e.clientX, e.clientY);
       drag = null;
     });
