@@ -44,6 +44,13 @@ const PApp = {
     addEventListener('resize', () => this.resize());
     this.resize();
     this.last = performance.now();
+    // 처음 온 사람에게 한 번 — 규모 · 차량 수는 설정에서
+    try {
+      if (!localStorage.getItem('parkHint')) {
+        setTimeout(() => this.toast('설정(P)에서 형식 · 가로 · 세로 · 층수와 들어오고 나가는 차량 수를 정할 수 있습니다', 6), 4500);
+        localStorage.setItem('parkHint', '1');
+      }
+    } catch (e) { /* 저장소가 막혀도 안내만 빠진다 */ }
     requestAnimationFrame((t) => this.loop(t));
   },
 
