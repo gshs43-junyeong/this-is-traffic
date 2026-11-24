@@ -52,6 +52,9 @@ const PApp = {
     this.G = buildGarage(c);
     this.sim = new ParkSim(this.G, c);
     PScene.init(this.G, this.sim);
+    // 따라가던 차가 주차를 마치면 내린 운전자를 따라 계단실까지 간다
+    this.sim.onPed = (p) => { if (this.sel === p.car && !p.toCar && this.mode === 'follow') this.sel = p; };
+    this.sim.onPedEnd = (p) => { if (this.sel === p) { this.sel = p.car; if (!p.toCar) this.setMode('orbit'); } };
     if (Render.gl) PScene.uploaded = false;
     this.cut = this.G.NL - 1;
     this.sel = null; this.mode = 'orbit';
@@ -103,7 +106,7 @@ const PApp = {
       const k = 1 - Math.exp(-dt / 0.35);
       const wantYaw = s.h;
       this.fYaw = this.fYaw == null ? wantYaw : this.fYaw + wrapPi(wantYaw - this.fYaw) * k;
-      const back = 8.5, up = 3.2;
+      const ped = !!s.pts, back = ped ? 5.0 : 8.5, up = ped ? 2.7 : 3.2;
       let x = s.x - Math.cos(this.fYaw) * back, y = s.y - Math.sin(this.fYaw) * back, z = s.z + up;
       const lv = PScene.lvAt(s.z);
       const inside = s.z > -900 && x > -1 && x < G.W + 1 && y > -1 && y < G.D + 1;
@@ -114,7 +117,7 @@ const PApp = {
       }
       this.fPos = this.fPos ? this.fPos.map((p, i) => p + ([x, y, z][i] - p) * Math.min(1, k * 2)) : [x, y, z];
       const [px, py, pz] = this.fPos;
-      const dx = s.x - px, dy = s.y - py, dz = s.z + 1.0 - pz;
+      const dx = s.x - px, dy = s.y - py, dz = s.z + (ped ? 1.2 : 1.0) - pz;
       this.camPose = { x: px, y: py, z: pz, yaw: Math.atan2(dy, dx), pitch: Math.atan2(dz, Math.hypot(dx, dy)) };
       this.cut = G.NL - 1;
       return;
@@ -199,6 +202,7 @@ const PApp = {
   },
   retarget() {
     const s = this.sel; if (!s) return;
+    if (s.gone) { this.sel = s.car || null; return this.retarget(); }
     this.cam.tx = s.x; this.cam.ty = s.y; this.cam.dist = Math.min(this.cam.dist, 40);
     this.cut = PScene.lvAt(s.z);
   },
@@ -213,6 +217,13 @@ const PApp = {
       if (!q) continue;
       const d = Math.hypot(q.x - px, q.y - py);
       if (d < bd) { bd = d; best = v; }
+    }
+    for (const p of this.sim.peds) {
+      if (p.delay > 0 || (this.mode !== 'follow' && p.z > zCut - 0.6)) continue;
+      const q = Render.point(p.x, p.y, p.z + 1.0);
+      if (!q) continue;
+      const d = Math.hypot(q.x - px, q.y - py);
+      if (d < bd) { bd = d; best = p; }
     }
     this.sel = best;
     this.hud();
@@ -337,7 +348,12 @@ const PApp = {
     st('#perf', `${(this.drawMs || 0).toFixed(1)} ms · 계산 ${(this.simMs || 0).toFixed(1)} ms · ${this.sim.cars.length} 대`);
     // 선택한 차
     const v = this.sel, box = $('#selBox');
-    if (v && v.mode !== 'done') {
+    if (v && v.pts) {
+      box.style.display = 'block';
+      box.innerHTML = `<h3>운전자 (${v.car ? v.car.cls.name + ' #' + v.car.id : ''})</h3><div class="row"><span class="k">상태</span><span class="v">${v.delay > 0 ? '차에서 내리는 중' : v.toCar ? '차로 걸어가는 중' : '계단실로 걸어가는 중'}</span></div>` +
+        `<div class="row"><span class="k">층</span><span class="v">${G.levels[PScene.lvAt(v.z)].name}</span></div>` +
+        `<div class="row"><span class="k">걷는 속도</span><span class="v">${fmt1(v.sp * 3.6)} km/h</span></div><div class="hint">계단실에 닿으면 차 위로 돌아갑니다</div>`;
+    } else if (v && v.mode !== 'done') {
       box.style.display = 'block';
       const what = v.mode === 'parked' ? (v.leaving ? (v.driverAway ? '운전자가 차로 오는 중' : '출차 대기 (통로가 빌 때까지)') : '주차 중') :
         v.mode === 'man' ? ({ revIn: '후면주차 중 (후진)', fwdIn: '전면주차 중', outFwd: '출차 — 앞으로 빠짐', outRev: '출차 — 후진으로 빠짐' }[v.man.kind]) :

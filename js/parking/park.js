@@ -884,6 +884,7 @@ class ParkSim {
       pants: rng.pick(['#26282d', '#3a4256', '#6b6455', '#1f2a3a']), hei: rng.range(1.6, 1.82), wait: 0,
     };
     this.peds.push(p);
+    if (this.onPed) this.onPed(p);
     return p;
   }
   /** 차 문 -> 면 앞 통로 가장자리 -> 통로를 따라(양방향으로 걸을 수 있다) -> 계단실 문 */
@@ -973,6 +974,8 @@ class ParkSim {
       }
       if (p.k >= p.pts.length - 1) {
         if (p.toCar && p.car) { p.car.driverAway = false; p.car.tryT = this.rng.range(2.5, 5); }
+        p.gone = true;
+        if (this.onPedEnd) this.onPedEnd(p);
         continue;                                   // 문에 닿았다 / 차에 탔다
       }
       const a = p.pts[p.k], b = p.pts[p.k + 1];
