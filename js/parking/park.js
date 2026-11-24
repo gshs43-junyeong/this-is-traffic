@@ -269,7 +269,8 @@ class ParkSim {
       v.balkChk = true;
       if (this.summary().qIn >= this.cfg.balk) { v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; this.planAhead(v); }
     }
-    if (v.inside && v.searching && !v.giveUp && this.time - v.tGate > 720) {
+    // ★ 면을 잡았거나 주차 계획이 있는 차는 포기시키지 않는다 — 계획(후진 대기 구간)을 쥔 채 포기하면 통로가 영영 막힌다
+    if (v.inside && v.searching && !v.giveUp && !v.stall && !v.plan && this.time - v.tGate > 720) {
       v.giveUp = true; v.searching = false; this.st.gaveUp++;
       if (v.stall) { if (v.stall.next === v) v.stall.next = null; else if (v.stall.car === v) { v.stall.state = 'free'; v.stall.car = null; } v.stall = null; }
       v.waitFor = false; v.route.length = v.ri + 1; v.path = null; this.planAhead(v);
