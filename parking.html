@@ -42,6 +42,10 @@ body.gl #sky,body.gl #gl{display:block}
 #chart{width:100%;height:58px;display:block;margin-top:8px;border-radius:4px}
 .leg{display:flex;gap:10px;font-size:10.5px;color:var(--dim);margin-top:4px}
 .leg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+#evLog{pointer-events:auto;margin-top:8px;border-top:1px solid var(--line);padding-top:6px;font-size:11.5px}
+#evLog div{display:flex;gap:6px;padding:2px 3px;border-radius:4px;cursor:pointer;white-space:nowrap;overflow:hidden}
+#evLog div:hover{background:#ffffff12}
+#evLog .t{color:#69728a;width:34px;flex:none}#evLog .d{margin-left:auto;color:#8d96a8}
 #selBox{position:absolute;right:16px;top:330px;width:258px;padding:11px 13px;display:none}
 #selBox .hint{font-size:11px;color:#69728a;margin-top:6px}
 #bar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;
@@ -130,6 +134,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
       <div class="row"><span class="k">지나감 / 포기</span><span class="v" id="sLost">0 / 0</span></div>
       <canvas id="chart" width="460" height="116"></canvas>
       <div class="leg"><span><i style="background:#5fc48f"></i>점유율</span><span><i style="background:#e0a63a"></i>찾는 차</span><span><i style="background:#e2574c"></i>입구 대기</span></div>
+      <div id="evLog"></div>
     </div>
     <div id="selBox" class="card"></div>
     <div id="bar" class="card">

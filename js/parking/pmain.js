@@ -554,6 +554,23 @@ const PApp = {
     st('#sQueue', S.queueAvg ? mmss(S.queueAvg) : '—');
     st('#sIO', `${S.inN} / ${S.outN}`);
     st('#sLost', `${S.lost} / ${S.gaveUp}` + (S.unjam ? ` · 교착 ${S.unjam}` : ''));
+    // 최근 기록 — 주차 · 출차가 끝날 때마다 한 줄 (누르면 그 차를 고른다)
+    const L = this.sim.st.log || [];
+    if (L.length !== this.logN || this.sim !== this.logSim) {
+      this.logN = L.length; this.logSim = this.sim;
+      const pat = this.cfg.pattern && this.cfg.pattern !== 'flat';
+      const when = (t) => { if (!pat) return mmss(t); const h = this.sim.hour() - (this.sim.time - t) / 3600; return pad2(Math.floor(h)) + ':' + pad2(Math.floor((h % 1) * 60)); };
+      const col = { 주차: '#7fe0a8', 입고: '#7fe0a8', 출차: '#ffd59f', 출고: '#ffd59f' };
+      $('#evLog').innerHTML = L.slice(-4).reverse().map((e) =>
+        `<div data-id="${e.id}"><span class="t">${when(e.t)}</span><span style="color:${col[e.kind]}">${e.kind}</span><span>${e.cls} #${e.id}${e.level ? ' · ' + e.level : ''}</span><span class="d">${mmss(e.dur)}</span></div>`).join('') ||
+        '<div style="color:#69728a;cursor:default">주차 · 출차가 끝나면 여기 쌓입니다</div>';
+      for (const el of $$('#evLog [data-id]')) el.onclick = () => {
+        const v = this.sim.cars.find((c) => c.id === +el.dataset.id);
+        if (v && v.mode !== 'done') this.sel = v; else this.toast('그 차는 이미 나갔습니다', 2);
+      };
+    }
+    const fb = $('#flowBox');
+    $('#selBox').style.top = fb.offsetHeight ? (fb.offsetTop + fb.offsetHeight + 10) + 'px' : '';
     const pat = this.cfg.pattern && this.cfg.pattern !== 'flat';
     if (pat) { const h = this.sim.hour(); st('#clock', `${pad2(Math.floor(h))}:${pad2(Math.floor((h % 1) * 60))}` + (this.speed > 1 ? ` · ×${this.speed}` : '')); }
     else st('#clock', mmss(this.sim.time) + (this.speed > 1 ? ` · ×${this.speed}` : ''));
