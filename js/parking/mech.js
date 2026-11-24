@@ -166,7 +166,7 @@ class MechSim extends ParkSim {
           const i = lane.indexOf(head); lane.splice(i, 1);
           this.dropRes(head);
           head.mode = 'mech'; head.inside = true; head.tGate = this.time; head.stall = slot; slot.state = 'res'; slot.car = head;
-          this.st.inN++; this.st.queueT.push(this.time - head.tArr);
+          this.st.inN++; this.st.queueT.push(head.qW || 0);
           T.carOn = head; T.slot = slot;
           T.p0 = { x: head.x, y: head.y, h: head.h };
           this.actDirty = true;

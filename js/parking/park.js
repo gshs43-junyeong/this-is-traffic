@@ -334,6 +334,7 @@ class ParkSim {
     v.brake = acc < -0.6 || (v.v < 0.05 && acc < 0.05);
     v.acc = acc;
     const nv = Math.max(0, v.v + acc * dt);
+    if (!v.inside && v.role === 'park' && nv < 1.0) v.qW = (v.qW || 0) + dt;    // 입구 대기 — 들어가기 전 서 있던 시간만
     v.s += (v.v + nv) * 0.5 * dt;
     v.v = nv;
     if (v.v < 0.1) v.stopT += dt; else v.stopT = 0;
@@ -600,7 +601,7 @@ class ParkSim {
   passGate(v, g) {
     if (g.kind === 'in') {
       v.inside = true; v.tGate = this.time; this.st.inN++;
-      this.st.queueT.push(this.time - v.tArr);
+      this.st.queueT.push(v.qW || 0);
       v.searching = true;
       if (this.cfg.guide) this.assign(v);
       v.route.length = v.ri + 1; v.path = null;
