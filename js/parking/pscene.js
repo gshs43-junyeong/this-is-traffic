@@ -256,6 +256,7 @@ const PScene = {
       M.quad([W, D, z - SL], [0, D, z - SL], [0, D, z], [W, D, z], sideC);
       M.quad([0, D, z - SL], [0, 0, z - SL], [0, 0, z], [0, D, z], sideC);
       M.quad([W, 0, z - SL], [W, D, z - SL], [W, D, z], [W, 0, z], sideC);
+      if (plaza) this.plazaTrees(M, z);
       // 통로 바닥 (에폭시) — 순환로 · 통로
       for (const ed of G.edges) {
         if (ed.level !== i || (ed.kind !== 'loop' && ed.kind !== 'aisle')) continue;
@@ -385,6 +386,28 @@ const PScene = {
     starts.push(all.p.length / 3);
     all.done();
     this.mesh = all; this.gStart = starts;      // 묶음 g(-1..) 은 [starts[g+1], starts[g+2])
+  },
+  /** 지하주차장 위 지면 광장 — 길 · 경사로 · 코어를 비켜 화단 나무와 벤치 */
+  plazaTrees(M, z) {
+    const G = this.G, W = G.W, D = G.D, RW = PK.RW;
+    const near = [];
+    for (const ed of G.edges) for (let k = 0; k < ed.n; k += 2) if (Math.abs(ed.z[k] - z) < 2.6) near.push(ed.x[k], ed.y[k]);
+    const clear = (x, y, r) => { for (let k = 0; k < near.length; k += 2) if ((near[k] - x) ** 2 + (near[k + 1] - y) ** 2 < r * r) return false; return true; };
+    for (let x = RW + 5; x < W - 3; x += 6.5) for (let y = 4; y < D - 3; y += 6.5) {
+      if (G.core && Math.abs(x - G.core.x) < 4 && y > D - 7) continue;
+      const hh = ihash(Math.round(x * 13 + y * 7));
+      const jx = x + (hh - 0.5) * 1.6, jy = y + (ihash(Math.round(x * 5 + y * 17)) - 0.5) * 1.6;
+      if (!clear(jx, jy, 5.2)) continue;
+      if (hh < 0.72) {
+        const r = 1.0 + hh * 0.9, ht = 3.2 + hh * 2.2;
+        M.box(jx - 1.1, jy - 1.1, z, jx + 1.1, jy + 1.1, z + 0.45, NX('#9a958a'), false, true);      // 화단
+        M.box(jx - 0.16, jy - 0.16, z + 0.45, jx + 0.16, jy + 0.16, z + ht * 0.55, NX('#6b4f36'), false, true);
+        M.box(jx - r, jy - r, z + ht * 0.45, jx + r, jy + r, z + ht, NX(hh < 0.36 ? '#4f7a3a' : '#5e8a43'), false, true);
+      } else {
+        M.box(jx - 0.9, jy - 0.25, z + 0.4, jx + 0.9, jy + 0.25, z + 0.48, NX('#8a6a48'), false, true);   // 벤치
+        for (const sx of [-0.75, 0.75]) M.box(jx + sx - 0.06, jy - 0.2, z, jx + sx + 0.06, jy + 0.2, z + 0.4, NX('#4b4f55'), false, true);
+      }
+    }
   },
   /** 간선을 따라 폭 2w 의 띠 */
   ribbon(M, ed, s0, s1, w, dz, color, covered, zf) {
