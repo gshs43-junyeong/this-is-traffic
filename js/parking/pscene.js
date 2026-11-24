@@ -504,7 +504,7 @@ const PScene = {
     const zCut = G.levels[opt.cut].z + G.H * 0.98;
     const em = { quad: (a, b, c, d, style) => { Render.begin(); Render.add(a[0], a[1], a[2]); Render.add(b[0], b[1], b[2]); Render.add(c[0], c[1], c[2]); Render.add(d[0], d[1], d[2]); Render.fill(style); } };
     for (const v of sim.cars) {
-      if (v.mode === 'parked' || v.mode === 'done') continue;
+      if (v.mode === 'parked' || v.mode === 'done' || v === opt.hide) continue;
       if (v.z > zCut - 0.6) continue;
       const dist = Render.depth(v.x, v.y, v.z);
       if (dist < -6 || dist > 900) continue;

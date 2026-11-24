@@ -53,7 +53,7 @@ const PApp = {
     this.sim = new ParkSim(this.G, c);
     PScene.init(this.G, this.sim);
     // 따라가던 차가 주차를 마치면 내린 운전자를 따라 계단실까지 간다
-    this.sim.onPed = (p) => { if (this.sel === p.car && !p.toCar && this.mode === 'follow') this.sel = p; };
+    this.sim.onPed = (p) => { if (this.sel === p.car && !p.toCar && (this.mode === 'follow' || this.mode === 'driver')) { this.sel = p; if (this.mode === 'driver') this.setMode('follow'); } };
     this.sim.onPedEnd = (p) => { if (this.sel === p) { this.sel = p.car; if (!p.toCar) this.setMode('orbit'); } };
     if (Render.gl) PScene.uploaded = false;
     this.cut = this.G.NL - 1;
@@ -88,7 +88,7 @@ const PApp = {
     }
     this.updateCam(raw);
     const t1 = performance.now();
-    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow', heat: this.heat, guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
+    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow' || this.mode === 'driver', hide: this.mode === 'driver' ? this.sel : null, heat: this.heat, guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
     this.overlay();
     this.drawMs = (this.drawMs || 0) * 0.9 + (performance.now() - t1) * 0.1;
     this.hudT = (this.hudT || 0) + raw;
@@ -101,6 +101,17 @@ const PApp = {
     const G = this.G, c = this.cam;
     const v = this.sel;
     if (v && v.mode === 'done') { this.sel = null; this.mode = 'orbit'; this.updMode(); }
+    // 운전석 시점 — 따라가는 차의 운전석(왼쪽 앞)에서 본다. 그 차는 그리지 않는다
+    if (this.mode === 'driver' && this.sel && !this.sel.pts) {
+      const s = this.sel, ch = Math.cos(s.h), sh = Math.sin(s.h);
+      const fwd = s.len * 0.02, left = s.wid * 0.22, eye = 1.12 * s.hei / 1.45;
+      const x = s.x + ch * fwd - sh * left, y = s.y + sh * fwd + ch * left;
+      this.dYaw = this.dYaw == null ? s.h : this.dYaw + wrapPi(s.h - this.dYaw) * Math.min(1, dt * 10);
+      this.camPose = { x, y, z: s.z + eye, yaw: this.dYaw, pitch: (s.p || 0) - 0.08 };
+      this.cut = G.NL - 1;
+      return;
+    }
+    if (this.mode === 'driver' && (!this.sel || this.sel.pts)) this.mode = 'follow';
     if (this.mode === 'follow' && this.sel) {
       const s = this.sel;
       const k = 1 - Math.exp(-dt / 0.35);
@@ -165,7 +176,7 @@ const PApp = {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       drag.x = e.clientX; drag.y = e.clientY;
       const c = this.cam;
-      if (this.mode === 'follow') { if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 6) { this.mode = 'orbit'; this.retarget(); this.updMode(); } else return; }
+      if (this.mode === 'follow' || this.mode === 'driver') { if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 6) { this.mode = 'orbit'; this.retarget(); this.updMode(); } else return; }
       if (drag.pan) {
         // 화면 오른쪽 = (sin yaw, -cos yaw), 화면 앞 = (cos yaw, sin yaw) — 끌면 땅을 잡아 끄는 느낌
         const k = c.dist / 650;
@@ -196,6 +207,7 @@ const PApp = {
       else if (k >= '1' && k <= '5') this.setSpeed([1, 2, 5, 10, 30][+k - 1]);
       else if (k === 't' || k === 'T') this.setMode(this.mode === 'top' ? 'orbit' : 'top');
       else if (k === 'f' || k === 'F') this.followRandom();
+      else if (k === 'v' || k === 'V') this.setMode(this.mode === 'driver' ? 'follow' : 'driver');
       else if (k === 'h' || k === 'H') this.toggleHeat();
       else if (k === 'Escape') { if ($('#panel').classList.contains('on')) this.panel(false); else { this.sel = null; this.setMode('orbit'); } }
       else if (k === 'p' || k === 'P') this.panel(!$('#panel').classList.contains('on'));
@@ -236,7 +248,8 @@ const PApp = {
     this.setMode('follow');
   },
   setMode(m) {
-    if (m === 'follow' && !this.sel) { this.followRandom(); return; }
+    if ((m === 'follow' || m === 'driver') && !this.sel) { this.followRandom(); if (m === 'driver' && this.sel) this.mode = 'driver'; this.updMode(); return; }
+    this.dYaw = null;
     this.mode = m; this.fPos = null; this.fYaw = null;
     if (m !== 'follow' && this.sel) this.retarget();
     this.updMode();
@@ -437,7 +450,7 @@ const PApp = {
     // 층 이름표 — 경사로 칸 바깥 벽에
     ctx.font = `600 ${Math.round(12 * this.H / 900 + 6)}px system-ui,sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    if (this.mode !== 'follow') {
+    if (this.mode !== 'follow' && this.mode !== 'driver') {
       {
         const L = G.levels[this.cut];
         const q = Render.point(PK.RW / 2, G.D - 1.2, L.z + 2.0);
