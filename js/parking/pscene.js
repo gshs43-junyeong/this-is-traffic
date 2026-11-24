@@ -496,7 +496,7 @@ const PScene = {
       ctx.globalAlpha = 1; Render.layer = 0;
       carMesh(em, v, v.x, v.y, v.z, v.h, v.p, covered, dist < 260);
       this.lights(v, opt.time, dist);
-      if (v === opt.sel) this.selMark(v);
+      if (v === opt.sel && !opt.follow) this.selMark(v);
     }
     // 세워 둔 차 중 나가려는 차 (깜빡이)
     for (const v of sim.cars) {
@@ -567,6 +567,15 @@ const PScene = {
     }
   },
   sky(ctx, W, H, cam) {
+    const G = this.G;
+    // 카메라가 덮인 층 안(지하 · 위층 슬래브 아래)에 있으면 먼 곳은 어둑한 실내색으로 흐린다
+    const inside = cam.x > 0 && cam.x < G.W && cam.y > 0 && cam.y < G.D && cam.z < G.levels[G.NL - 1].z + 0.2 &&
+      (cam.z < -0.2 || this.lvAt(cam.z) < G.NL - 1);
+    if (inside) {
+      ctx.fillStyle = '#4a4f4c'; ctx.fillRect(0, 0, W, H);
+      this.fogCol = cam.z < 0 ? [0.29, 0.31, 0.30] : [0.55, 0.58, 0.57];
+      return;
+    }
     const g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, '#6f9ccc'); g.addColorStop(0.55, '#c6d6e4'); g.addColorStop(1, '#d9e0e4');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);

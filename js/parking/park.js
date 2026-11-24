@@ -67,6 +67,16 @@ class ParkSim {
     this.histT = 0;
     this.prefill(cfg.initOcc);
   }
+  /** 지금 n 대를 더 들여보낸다 (앞 도로에 차례로 나타난다) */
+  addArrivals(n) { this.batch = (this.batch || 0) + n; }
+  /** 세워 둔 차 n 대에게 지금 출차를 시킨다 (오래 세운 차부터) */
+  addDepartures(n) {
+    const cand = this.cars.filter((v) => v.mode === 'parked' && !v.leaving).sort((a, b) => a.tPark - b.tPark);
+    let k = 0;
+    for (const v of cand) { if (k >= n) break; v.leaving = true; v.tReq = this.time; v.tryT = this.rng.range(0, 3); if (v.stall) v.stall.state = 'leave'; k++; }
+    this.actDirty = true;
+    return k;
+  }
   nextExp(rate) { return rate > 0 ? this.rng.exp(3600 / rate) : Infinity; }
 
   /* ---------- 시작 점유 ---------- */
@@ -111,6 +121,7 @@ class ParkSim {
     // 도착 — 주차하러 오는 차 · 통과 교통
     if (this.time >= this.tIn) { this.pending++; this.tIn = this.time + this.nextExp(cfg.inRate); }
     if (this.pending > 0 && this.spawn(G.streetIn, 'park')) this.pending--;
+    if (this.batch > 0) { const v = this.spawn(G.streetIn, 'park'); if (v) { v.noBalk = true; this.batch--; } }   // 일부러 보낸 차는 지나치지 않는다
     if (this.time >= this.tThru) { if (this.spawn(G.streetIn, 'thru')) this.tThru = this.time + this.nextExp(cfg.thruRate); }
     if (this.time >= this.tThruE) { if (this.spawn(G.streetEB, 'thru')) this.tThruE = this.time + this.nextExp(cfg.thruRate); }
     // 출차 요청 — 세워 둔 차 하나를 고른다
@@ -162,7 +173,7 @@ class ParkSim {
     this.cars.push(v); this.actDirty = true;
     this.planAhead(v);
     this.pose(v);
-    return true;
+    return v;
   }
 
   /* ---------- 경로 ---------- */
@@ -274,11 +285,17 @@ class ParkSim {
     }
     if (v.mode !== 'drive') return;
     this.releaseRes(v);
-    if (v.role === 'park' && !v.inside && !v.balkChk && v.edge === this.G.streetIn && v.edge.len - v.s < 45) {
+    if (v.role === 'park' && !v.inside && !v.balkChk && !v.noBalk && v.edge === this.G.streetIn && v.edge.len - v.s < 45) {
       v.balkChk = true;
-      if (this.summary().qIn >= this.cfg.balk) { v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; this.planAhead(v); }
+      // 입구 대기열이 길거나 '만차' 표시가 켜져 있으면 대개 들어가지 않고 지나간다
+      const S = this.summary();
+      if (S.qIn >= this.cfg.balk || (S.free - S.hunting <= 0 && this.rng.chance(0.8))) { v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; this.planAhead(v); }
     }
     // ★ 면을 잡았거나 주차 계획이 있는 차는 포기시키지 않는다 — 계획(후진 대기 구간)을 쥔 채 포기하면 통로가 영영 막힌다
+    // 도로에서 입구 차례를 기다리다 만차가 이어지면 포기하고 지나간다 (진입로에 들어선 차는 차단기 앞에서 기다린다)
+    if (v.role === 'park' && !v.inside && v.edge === this.G.streetIn && v.stopT > 45 && !this.admit()) {
+      v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; v.path = null; this.planAhead(v);
+    }
     if (v.inside && v.searching && !v.giveUp && !v.stall && !v.plan && this.time - v.tGate > 720) {
       v.giveUp = true; v.searching = false; this.st.gaveUp++;
       if (v.stall) { if (v.stall.next === v) v.stall.next = null; else if (v.stall.car === v) { v.stall.state = 'free'; v.stall.car = null; } v.stall = null; }
@@ -376,6 +393,8 @@ class ParkSim {
       }
       // 합류점
       const nd = ed.to, dN = base + ed.len;
+      // 앞에 차가 끼어들었으면(출차 등) 쥔 예약을 놓는다 — 줄의 맨 앞 차만 합류점을 쥔다
+      if (nd.res === self && leaderFound) { nd.res = null; const ri = v.res.indexOf(nd); if (ri >= 0) v.res.splice(ri, 1); }
       if (nd.ins.length > 1 && nd.res !== self) {
         const need = v.v * v.v / (2 * 1.4) + 5;
         // 줄의 맨 앞 차만 예약한다 (뒤차가 먼저 잡으면 앞차가 못 들어가 서로 막힌다)
@@ -539,7 +558,7 @@ class ParkSim {
       /* 앞차가 서 있어 정지점에 못 닿으면 조금 모자란 자리에서 그대로 후진을 시작한다
          (기다리면 앞차는 합류점에서, 뒤차는 이 차의 대기 구간에서 서로 막힌다) */
       if (P.how === 'rev' && !P.go && v.v < 0.12 && Math.abs(v.s - P.sStop) < (v.stopT > 1.5 ? 1.7 : 0.9)) { P.go = true; this.startMan(v, 'revIn'); }
-      else if (P.how === 'fwd' && v.s >= P.sTurn - 0.05) this.startMan(v, 'fwdIn');
+      else if (P.how === 'fwd' && (v.s >= P.sTurn - 0.05 || (v.v < 0.1 && v.stopT > 1 && v.s >= P.sTurn - 1.2))) this.startMan(v, 'fwdIn');
       return;
     }
     if (!v.searching || !ed.stalls.length) return;
@@ -826,7 +845,7 @@ class ParkSim {
     const avg = (a, n) => { const b = a.slice(-n); return b.length ? b.reduce((p, q) => p + q, 0) / b.length : 0; };
     return {
       total: G.stalls.length, occ, res, free: G.stalls.length - occ - res, per,
-      hunting, man, qIn, qOut, inside, wantOut,
+      hunting, man, qIn, qOut, inside, wantOut, coming: (this.pending | 0) + (this.batch | 0),
       inN: this.st.inN, outN: this.st.outN, lost: this.st.lost, gaveUp: this.st.gaveUp,
       searchAvg: avg(this.st.search, 40), exitAvg: avg(this.st.exitT, 40), queueAvg: avg(this.st.queueT, 40),
     };

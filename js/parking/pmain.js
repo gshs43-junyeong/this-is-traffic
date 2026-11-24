@@ -83,7 +83,7 @@ const PApp = {
     }
     this.updateCam(raw);
     const t1 = performance.now();
-    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
+    PScene.draw(this.ctx, this.W, this.H, this.camPose, { cut: this.cut, skyCtx: this.skyCtx, time: this.sim.time, sel: this.sel, follow: this.mode === 'follow', guide: this.cfg.guide, dt: raw * (this.paused ? 0 : this.speed) });
     this.overlay();
     this.drawMs = (this.drawMs || 0) * 0.9 + (performance.now() - t1) * 0.1;
     this.hudT = (this.hudT || 0) + raw;
@@ -218,6 +218,8 @@ const PApp = {
     $('#bUp').onclick = () => this.setCut(this.cut + 1);
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
+    $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };
+    $('#bOut').onclick = () => { const n = +$('#nBatch').value; const k = this.sim.addDepartures(n); this.toast(k ? `${k}대가 출차를 시작합니다 (통로가 비면 빠져나옵니다)` : '세워 둔 차가 없습니다', 2.5); };
     $('#bClose').onclick = () => this.panel(false);
     $('#bApply').onclick = () => { this.readPanel(true); this.panel(false); this.rebuild(); };
     for (const b of $$('[data-preset]')) b.onclick = () => {
@@ -300,7 +302,7 @@ const PApp = {
     const st = (id, v) => { $(id).textContent = v; };
     st('#sHunt', S.hunting + ' 대');
     st('#sMan', S.man + ' 대');
-    st('#sQin', S.qIn + ' 대');
+    st('#sQin', S.qIn + ' 대' + (S.coming ? ` (+${S.coming} 오는 중)` : ''));
     st('#sQout', (S.qOut + S.wantOut) + ' 대');
     st('#sSearch', S.searchAvg ? mmss(S.searchAvg) : '—');
     st('#sExit', S.exitAvg ? mmss(S.exitAvg) : '—');
