@@ -310,7 +310,7 @@ const PApp = {
       el.addEventListener('input', () => { this.readPanel(false); this.live(); });
     }
     for (const id of ['guide', 'gate', 'pattern']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
-    $('#c_kind').addEventListener('change', () => this.est());
+    $('#c_kind').addEventListener('change', () => { this.est(); this.dimFields(); });
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
     this.setSpeed(1);
   },
@@ -375,6 +375,7 @@ const PApp = {
     $('#c_pattern').value = c.pattern || 'flat';
     $('#c_lanes').value = String(c.lanes || 1);
     $('#c_kind').value = c.kind || 'ramp';
+    this.dimFields();
     this.est();
   },
   readPanel(all) {
@@ -389,6 +390,14 @@ const PApp = {
     if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; }
     this.est();
     this.save();
+  },
+  /** 기계식에서 쓰지 않는 칸은 흐리게 */
+  dimFields() {
+    const mech = $('#c_kind').value === 'mech';
+    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare']) {
+      const f = $('#' + id) && $('#' + id).closest('.fld');
+      if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
+    }
   },
   /** 설정 창의 규모 미리 셈 — 짓기 전에 면 수를 알려 준다 */
   est() {
