@@ -311,6 +311,10 @@ class ParkSim {
       for (const ed of u.outs) {
         if (ed.kind === 'exit' || ed.kind === 'street') continue;
         const f = u === nd ? ed : first[u.id];
+        /* ★ 꼭대기 층에서는 줄 선 간선(서 있는 차)을 덜 고른다. 만차 직전에 찾는 차가 옥상 순환로 · 지름길 통로 고리를
+           꽉 채워 서로 막았다(출근 몰림 시드 2: 출차 중앙 1299 s · 교착 풀기 6 → 172 s · 0, 검사 전체 교착 풀기 14 → 8). 모든 층에 걸면
+           퇴근 몰림 · 정산 2차로의 교착 풀기가 늘어(14 → 18) 꼭대기 층만 — 맨 아래층에 더해도 차이 없었다 */
+        let jam = 0; if (ed.level === G.NL - 1) for (const c of ed.cars) if (c.v < 1 && c !== v) jam++;
         if (ed.stalls.length && !v.visited.has(ed.id)) {
           const dl = ed.level - lv0;
           /* 면이 많은 통로를 먼저 (같은 거리에서 둘레길 3 면보다 통로 16 면을 고른다).
@@ -318,9 +322,10 @@ class ParkSim {
           let c = dist[u.id] + Math.abs(dl) * 45 - Math.min(30, ed.stalls.length * 2);
           if (v.seen.has('f' + ed.id)) c -= 25;
           if (dl !== 0 && Math.sign(dl) !== v.pref) c += 350;
+          c += jam * 10;
           if (c < bc) { bc = c; best = f; }
         }
-        const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0);
+        const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0) + jam * 10;
         const to = ed.to;
         if (dist[u.id] + w < dist[to.id]) { dist[to.id] = dist[u.id] + w; first[to.id] = f; open.push(to); }
       }
