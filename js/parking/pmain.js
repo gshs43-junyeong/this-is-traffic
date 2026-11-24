@@ -647,7 +647,7 @@ const PApp = {
         '<div style="color:#69728a;cursor:default">주차 · 출차가 끝나면 여기 쌓입니다</div>';
       for (const el of $$('#evLog [data-id]')) el.onclick = () => {
         const v = this.sim.cars.find((c) => c.id === +el.dataset.id);
-        if (v && v.mode !== 'done') this.sel = v; else this.toast('그 차는 이미 나갔습니다', 2);
+        if (v && v.mode !== 'done') { this.sel = v; if (this.mode === 'orbit' || this.mode === 'top') this.retarget(); } else this.toast('그 차는 이미 나갔습니다', 2);
       };
     }
     const fb = $('#flowBox');
