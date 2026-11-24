@@ -184,6 +184,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="fld"><label>시작 점유율 <span class="val" id="v_initOcc"></span></label><input type="range" id="c_initOcc" min="0" max="1" step="0.05"></div>
         <div class="fld"><label>시드 <span class="val" id="v_seed"></span></label><input type="range" id="c_seed" min="1" max="99" step="1"></div>
         <div class="fld"><label>입구 · 출구 차단기</label><select id="c_lanes"><option value="1">각 1개 (한 차로)</option><option value="2">각 2개 (차단기 앞에서 두 갈래)</option></select><div class="hint">출구 처리량은 정산 시간이 정한다 — 차로를 둘로 하면 거의 두 배.</div></div>
+        <div class="fld"><label>진입 완충 <span class="val" id="v_throat"></span></label><input type="range" id="c_throat" min="0" max="40" step="5"><div class="hint">입구가 1층 순환로에 닿는 곳에서 이 거리 안에는 주차면을 두지 않는다 — 들어오자마자 후진 주차하는 차가 입구를 막지 않게.</div></div>
       </div>
       <div id="estOut"></div>
       <div class="sect">수요</div>

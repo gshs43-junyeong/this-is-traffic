@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat',
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat', throat: 0,
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -412,6 +412,7 @@ const PApp = {
       V.push([base.guide ? '유도 끔' : '유도 켬', { guide: !base.guide }]);
       V.push([base.gate === 'lpr' ? '주차권 · 출구 정산' : '번호판 인식', { gate: base.gate === 'lpr' ? 'ticket' : 'lpr' }]);
       V.push([(base.lanes | 0) >= 2 ? '차단기 1차로' : '차단기 2차로', { lanes: (base.lanes | 0) >= 2 ? 1 : 2 }]);
+      V.push([(base.throat | 0) > 0 ? '진입 완충 없음' : '진입 완충 25 m', { throat: (base.throat | 0) > 0 ? 0 : 25 }]);
     }
     const rows = [], DUR = 3600, run = this.pvRun = (this.pvRun || 0) + 1;   // 멈추고 곧바로 다시 눌러도 옛 계산이 끼어들지 않게
     let vi = -1, sim = null, t = 0, qMax = 0;
@@ -504,7 +505,7 @@ const PApp = {
   fields: {
     W: [(v) => v + ' m'], D: [(v) => v + ' m'], U: [(v) => $('#c_kind').value === 'mech' ? Math.max(1, v) + ' 단' : v === 0 ? '없음 (지면 광장)' : v + '개 층'], B: [(v) => v === 0 ? '없음' : v + ($('#c_kind').value === 'mech' ? ' 단' : '개 층')],
     inRate: [(v) => v + ' 대/시'], outRate: [(v) => v + ' 대/시'], thruRate: [(v) => v + ' 대/시'],
-    initOcc: [(v) => Math.round(v * 100) + ' %'], revShare: [(v) => Math.round(v * 100) + ' %'], balk: [(v) => v + ' 대'], seed: [(v) => '' + v],
+    initOcc: [(v) => Math.round(v * 100) + ' %'], revShare: [(v) => Math.round(v * 100) + ' %'], balk: [(v) => v + ' 대'], seed: [(v) => '' + v], throat: [(v) => v === 0 ? '없음' : v + ' m'],
   },
   fillPanel() {
     const c = this.cfg;
@@ -526,7 +527,7 @@ const PApp = {
     for (const k in this.fields) {
       const el = $('#c_' + k); if (!el) continue;
       const v = +el.value;
-      if (all || !['W', 'D', 'U', 'B', 'initOcc', 'seed'].includes(k)) c[k] = v;
+      if (all || !['W', 'D', 'U', 'B', 'initOcc', 'seed', 'throat'].includes(k)) c[k] = v;
       const o = $('#v_' + k); if (o) o.textContent = this.fields[k][0](v);
     }
     c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value; c.pattern = $('#c_pattern').value;
@@ -537,7 +538,7 @@ const PApp = {
   /** 기계식에서 쓰지 않는 칸은 흐리게 */
   dimFields() {
     const mech = $('#c_kind').value === 'mech';
-    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare']) {
+    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare', 'c_throat']) {
       const f = $('#' + id) && $('#' + id).closest('.fld');
       if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
     }
@@ -571,7 +572,7 @@ const PApp = {
       const lpr = $('#c_gate').value === 'lpr', two = +$('#c_lanes').value >= 2;
       const exitCap = lpr ? (two ? 420 : 400) : (two ? 195 : 165);
       if (outR > exitCap * 0.9) W.push(`나가는 차 ${outR}대/시가 출구 처리량(${lpr ? '번호판 인식' : '주차권 정산'} · 차단기 ${two ? 2 : 1}차로 약 ${exitCap}대/시)에 ${outR > exitCap ? '넘칩니다' : '가깝습니다'} — 출구 대기열이 안쪽 통로로 번져 들어오는 차까지 막습니다.${lpr ? '' : ' 번호판 인식으로 바꾸면 두 배 남짓이 됩니다.'}`);
-      if (inR > 300) W.push(`들어오는 차 ${inR}대/시 — 입구 바로 뒤 통로에서 주차하는 차가 길을 막아, 이 모형에서는 시간당 210~320대쯤에서 진입로에 줄이 섭니다. 병목이 차단기가 아니라 입구 뒤 통로라 차단기를 두 차로로 늘려도 거의 그대로입니다.`);
+      if (inR > 300) W.push(`들어오는 차 ${inR}대/시 — 입구 바로 뒤 통로에서 주차하는 차가 길을 막아, 이 모형에서는 시간당 210~320대쯤에서 진입로에 줄이 섭니다. 병목이 차단기가 아니라 입구 뒤 통로라 차단기를 두 차로로 늘려도 거의 그대로이고, 진입 완충을 25 m 두면 늘어납니다(64×52 에서 329 → 411 대/시, 면은 9 % 줄어든다).`);
     }
     const el = $('#demWarn');
     el.innerHTML = W.map((w) => '⚠ ' + w).join('<br>');
@@ -587,7 +588,7 @@ const PApp = {
         $('#estOut').textContent = `기계식 주차타워 ${g.towers.length}기 (가로 ${fmt1(g.W)} m) · 탑마다 ${g.NL}단 × 2칸 · 총 ${g.stalls.length}면 · 높이 약 ${fmt1(g.levels[g.NL - 1].z + MK.pitch + 0.7)} m — 세로는 쓰지 않는다`;
         return;
       }
-      const g = buildGarage({ W, D, U, B, seed: 1 });
+      const g = buildGarage({ W, D, U, B, seed: 1, throat: +$('#c_throat').value });
       $('#estOut').textContent = `${g.levels[0].name}~${g.levels[g.NL - 1].name} (${g.NL}개 층) · 주차면 ${g.stalls.length}면 · 층당 약 ${Math.round(g.stalls.length / Math.max(1, g.levels.filter((l) => l.park).length))}면 · 경사로 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %`;
     } catch (e) { $('#estOut').textContent = '배치 불가: ' + e.message; }
   },
@@ -753,6 +754,12 @@ const PApp = {
         ctx.fillStyle = '#10141bcc'; const w = ctx.measureText(t).width + 12;
         ctx.fillRect(q.x - w / 2, q.y - 10, w, 20);
         ctx.fillStyle = t === '출구' ? '#ffc07a' : freeN ? '#7fe0a8' : '#ff6b5e'; ctx.fillText(t, q.x, q.y);
+      }
+      // 진입 완충 — 면을 뺀 자리가 빠진 것처럼 보이지 않게 (그 층이 맨 위로 보일 때만)
+      const th = +G.cfg.throat || 0, en = G.entryEnd;
+      if (th > 0 && en && en.level === this.cut) {
+        const q = Render.point(en.x, en.y + 3, en.z + 0.4), t = `진입 완충 ${th} m — 주차면 없음`;
+        if (q) { const w = ctx.measureText(t).width + 12; ctx.fillStyle = '#10141bcc'; ctx.fillRect(q.x - w / 2, q.y - 10, w, 20); ctx.fillStyle = '#ffd59f'; ctx.fillText(t, q.x, q.y); }
       }
     }
     // 비네트

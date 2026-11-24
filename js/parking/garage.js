@@ -405,6 +405,9 @@ function placeStalls(G) {
       if (pr.d < bd) { bd = pr.d; best = { ed, s: pr.s }; }
     }
     if (!best) return;
+    // 진입 완충 — 입구가 순환로에 닿는 곳에서 throat m 안에는 면을 두지 않는다 (들어오자마자 주차하는 차가 입구를 막지 않게)
+    const th = +G.cfg.throat || 0, en = G.entryEnd;
+    if (th > 0 && en && en.level === level && Math.hypot(cx - en.x, cy - en.y) < th) return;
     const ed = best.ed;
     // 원호 위의 면은 버린다 (돌면서 들어갈 수 없다)
     const k0 = clamp(Math.round((best.s - 4) / ed.step), 0, ed.n - 1), k1 = clamp(Math.round((best.s + 4) / ed.step), 0, ed.n - 1);
