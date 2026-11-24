@@ -401,7 +401,7 @@ const PApp = {
   panel(on) { $('#panel').classList.toggle('on', on); if (on) { this.fillPanel(); this.analysis(); } },
   /** 미리 돌려 보기 — 설정 몇 벌을 화면 밖에서 1 시간씩 돌려 표로 견준다 (화면이 멈추지 않게 조금씩) */
   preview() {
-    if (this.pv) return;
+    if (this.pv) { this.pv = false; $('#bPv').textContent = '비교 실행'; $('#pvMsg').textContent = '멈췄습니다'; return; }   // 돌리는 중에 다시 누르면 멈춘다
     const base = Object.assign({}, this.cfg), mech = base.kind === 'mech';
     const V = [['지금 설정', {}]];
     if (mech) {
@@ -413,11 +413,11 @@ const PApp = {
       V.push([base.gate === 'lpr' ? '주차권 · 출구 정산' : '번호판 인식', { gate: base.gate === 'lpr' ? 'ticket' : 'lpr' }]);
       V.push([(base.lanes | 0) >= 2 ? '차단기 1차로' : '차단기 2차로', { lanes: (base.lanes | 0) >= 2 ? 1 : 2 }]);
     }
-    const rows = [], DUR = 3600;
+    const rows = [], DUR = 3600, run = this.pvRun = (this.pvRun || 0) + 1;   // 멈추고 곧바로 다시 눌러도 옛 계산이 끼어들지 않게
     let vi = -1, sim = null, t = 0, qMax = 0;
     const next = () => {
       vi++;
-      if (vi >= V.length) { this.pv = false; $('#bPv').disabled = false; $('#pvMsg').textContent = '끝 — 같은 시드 · 처음부터 1 시간'; return; }
+      if (vi >= V.length) { this.pv = false; $('#bPv').textContent = '비교 실행'; $('#pvMsg').textContent = '끝 — 같은 시드 · 처음부터 1 시간'; return; }
       const c = Object.assign({}, base, V[vi][1]);
       const G = mech ? buildMech(c) : buildGarage(c);
       sim = mech ? new MechSim(G, c) : new ParkSim(G, c);
@@ -430,6 +430,7 @@ const PApp = {
       $('#pvTable').innerHTML = h;
     };
     const work = () => {
+      if (!this.pv || this.pvRun !== run) return;
       const t0 = performance.now();
       while (performance.now() - t0 < 45 && t < DUR) {
         sim.step(1); t++;
@@ -441,9 +442,9 @@ const PApp = {
         rows.push({ name: V[vi][0], base: vi === 0, inN: st.inN, outN: st.outN, park: q(st.search, 0.5) + ' · ' + q(st.search, 0.9), exit: q(st.exitT, 0.5) + ' · ' + q(st.exitT, 0.9), qMax, lost: st.lost, gaveUp: st.gaveUp });
         draw(); next();
       }
-      if (this.pv) setTimeout(work, 0);
+      if (this.pv && this.pvRun === run) setTimeout(work, 0);
     };
-    this.pv = true; $('#bPv').disabled = true; rows.length = 0; draw();
+    this.pv = true; $('#bPv').textContent = '멈춤'; rows.length = 0; draw();
     next(); work();
   },
 
