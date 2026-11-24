@@ -390,6 +390,24 @@ const PApp = {
           ctx.font = `600 ${Math.round(12 * this.H / 900 + 6)}px system-ui,sans-serif`;
         }
       }
+      // 경사로 방향 — 이 층에서 오르는 곳 · 내려가는 곳
+      {
+        const i = this.cut, L = G.levels[i];
+        // 두 경사로는 3.7 m 떨어져 있어 이름표가 겹친다 — 한 장에 나란히
+        const parts = [];
+        if (i < G.NL - 1) parts.push(['▲ ' + G.levels[i + 1].name, '#9fd8ff']);
+        if (i > 0) parts.push(['▼ ' + G.levels[i - 1].name, '#ffd59f']);
+        const q = parts.length && Render.point(PK.RW / 2, G.y_rt - 3, L.z + 1.8);
+        if (q) {
+          const ws = parts.map(([t]) => ctx.measureText(t).width), gap = 10;
+          const tw = ws.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 12;
+          ctx.fillStyle = '#10141bcc'; ctx.fillRect(q.x - tw / 2, q.y - 9, tw, 18);
+          let x = q.x - tw / 2 + 6;
+          ctx.textAlign = 'left';
+          parts.forEach(([t, col], k) => { ctx.fillStyle = col; ctx.fillText(t, x, q.y); x += ws[k] + gap; });
+          ctx.textAlign = 'center';
+        }
+      }
       // 입구 · 출구
       for (const [ed, t] of [[G.entry, '입구'], [G.exit, '출구']]) {
         const q0 = ed.at(ed.gate.s - 6), q = Render.point(q0.x, q0.y, 2.6);
