@@ -295,6 +295,7 @@ const PApp = {
     $('#bInc').onclick = () => this.incident();
     $('#bDn').onclick = () => this.setCut(this.cut - 1);
     $('#bSet').onclick = () => this.panel(true);
+    $('#bCsv').onclick = () => this.download();
     $('#bIn').onclick = () => { const n = +$('#nBatch').value; this.sim.addArrivals(n); this.toast(`${n}대가 앞 도로로 옵니다`, 2); };
     $('#bOut').onclick = () => { const n = +$('#nBatch').value; const k = this.sim.addDepartures(n); this.toast(k ? `${k}대가 출차를 시작합니다 (통로가 비면 빠져나옵니다)` : '세워 둔 차가 없습니다', 2.5); };
     $('#bClose').onclick = () => this.panel(false);
@@ -323,6 +324,20 @@ const PApp = {
   },
   save() { try { localStorage.setItem('parkcfg', JSON.stringify(this.cfg)); } catch (e) { /* 무시 */ } },
   panel(on) { $('#panel').classList.toggle('on', on); if (on) { this.fillPanel(); this.analysis(); } },
+  /** 기록 내려받기 — 시계열과 차마다의 기록을 CSV 두 묶음으로 (엑셀이 한글을 읽게 BOM) */
+  download() {
+    const st = this.sim.st, q = (x) => (typeof x === 'number' ? (Math.round(x * 100) / 100) : '"' + String(x).replace(/"/g, '""') + '"');
+    const lines = ['# 시계열 (10 초 간격)', 'sim_s,hour,occupied,total,searching,maneuvering,queue_in,queue_out,entered,exited,passed_by'];
+    for (const r of st.hist2 || []) lines.push([r.t, r.h, r.occ, r.total, r.hunt, r.man, r.qIn, r.qOut, r.inN, r.outN, r.lost].map(q).join(','));
+    lines.push('', '# 차마다의 기록 (주차 · 입고 = 차단기/문 앞부터 주차까지, 출차 · 출고 = 호출부터 출구까지)', 'sim_s,event,car_id,class,duration_s,level,stall_type');
+    for (const r of st.log || []) lines.push([r.t, r.kind, r.id, r.cls, r.dur, r.level, r.type].map(q).join(','));
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `parking-${this.G.mech ? 'mech' : 'ramp'}-${Math.round(this.sim.time)}s.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  },
   /** 분석 칸 — 소요 시간 분포(분 단위 막대)와 층별 표 */
   analysis() {
     const hist = (id, lab, arr) => {

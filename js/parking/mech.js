@@ -184,7 +184,7 @@ class MechSim extends ParkSim {
         v.x = lerp(T.x, T.slot.cx, ease);
         if (f >= 1) {
           this.parkAt(v, T.slot); v.tPark = this.time; v.searching = false;
-          this.st.search.push(this.time - v.tGate);
+          this.st.search.push(this.time - v.tGate); this.logEvt('입고', v, this.time - v.tGate, T.slot);
           T.carOn = null;
           go('down', liftDur(T.slot.z));
         }
@@ -222,7 +222,7 @@ class MechSim extends ParkSim {
           v.mode = 'drive'; v.edge = e; v.s = v.len * 0.5 + 0.2; v.v = 1.0; v.route = [e]; v.ri = 0; v.path = null; v.prev = null;
           v.done = true; v.inside = false; v.stall = null; v.leaving = true;
           e.cars.push(v);
-          this.st.outN++; this.st.exitT.push(this.time - v.tReq);
+          this.st.outN++; this.st.exitT.push(this.time - v.tReq); this.logEvt('출고', v, this.time - v.tReq);
           this.planAhead(v); this.pose(v);
           this.actDirty = true;
           go('clear', 0);

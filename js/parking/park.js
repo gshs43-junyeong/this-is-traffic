@@ -606,7 +606,7 @@ class ParkSim {
       this.planAhead(v);
     } else {
       this.st.outN++;
-      this.st.exitT.push(this.time - v.tReq);
+      this.st.exitT.push(this.time - v.tReq); this.logEvt('출차', v, this.time - v.tReq);
       v.done = true; v.inside = false;
       v.route.length = v.ri + 1; v.path = null;
       this.planAhead(v);
@@ -845,7 +845,7 @@ class ParkSim {
     if (M.kind === 'revIn' || M.kind === 'fwdIn') {
       if (v.plan && v.plan.blk) this.dropBlk(v.plan.blk);
       v.plan = null; v.man = null;
-      this.st.search.push(this.time - v.tGate);
+      this.st.search.push(this.time - v.tGate); this.logEvt('주차', v, this.time - v.tGate, s);
       v.revPick = null;
       this.parkAt(v, s, M.kind === 'revIn' ? 'out' : 'in');
       v.tPark = this.time;
@@ -1067,10 +1067,20 @@ class ParkSim {
   }
 
   /* ---------- 통계 ---------- */
+  /** 차마다의 기록 (CSV 내려받기용) — 최근 2 만 건 */
+  logEvt(kind, v, dur, stall) {
+    const L = this.st.log || (this.st.log = []);
+    L.push({ t: this.time, kind, id: v.id, cls: v.cls.name, dur, level: stall ? this.G.levels[stall.level].name : '', type: stall ? stall.type || '' : '' });
+    if (L.length > 20000) L.shift();
+  }
   record() {
     const S = this.summary();
     this.st.hist.push({ t: this.time, occ: S.occ, hunt: S.hunting, qIn: S.qIn, qOut: S.qOut });
     if (this.st.hist.length > 720) this.st.hist.shift();
+    // 내려받기용 긴 시계열 (10 초 간격, 하루치까지)
+    const H = this.st.hist2 || (this.st.hist2 = []);
+    H.push({ t: this.time, h: this.hour(), occ: S.occ, total: S.total, hunt: S.hunting, man: S.man, qIn: S.qIn, qOut: S.qOut, inN: S.inN, outN: S.outN, lost: S.lost });
+    if (H.length > 8640) H.shift();
   }
   summary() {
     const G = this.G;

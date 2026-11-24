@@ -192,7 +192,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <div class="fld"><label>차단기</label><select id="c_gate"><option value="lpr">번호판 인식 (입 1.4~2.6 s · 출 1.6~3.2 s)</option><option value="ticket">주차권 · 출구 정산 (입 5~9 s · 출 9~22 s)</option></select></div>
         <div class="fld"><label>후면주차 비율 <span class="val" id="v_revShare"></span></label><input type="range" id="c_revShare" min="0" max="1" step="0.05"><div class="hint">후진으로 넣는 차는 면을 지나쳐 서고, 뒤차는 면 앞에서 기다린다. 뒤차가 붙어 있으면 전면주차로 바꾼다.</div></div>
       </div>
-      <div class="sect">분석 (지금까지의 기록)</div>
+      <div class="sect">분석 (지금까지의 기록) <button id="bCsv" style="margin-left:10px;padding:4px 10px;font-size:11.5px">기록 내려받기 (CSV)</button></div>
       <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
         <div class="fld"><label>주차 소요 분포 (차단기 → 주차 완료) <span class="val" id="aSearch"></span></label><canvas id="hSearch" width="560" height="200" style="width:100%"></canvas></div>
         <div class="fld"><label>출차 소요 분포 (호출 → 출구) <span class="val" id="aExit"></span></label><canvas id="hExit" width="560" height="200" style="width:100%"></canvas></div>
