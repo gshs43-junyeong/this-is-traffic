@@ -85,7 +85,8 @@ const PApp = {
     for (const id of ['#bHeat', '#bInc']) { const b = $(id); if (b) { b.disabled = !!this.G.mech; b.style.opacity = this.G.mech ? 0.35 : 1; } }
     if (this.G.mech && this.heat) this.toggleHeat();
     const S = this.sim.summary();
-    this.toast(`${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · 경사로 최대 ${fmt1(G.grade * 100)}%`, 4);
+    this.toast(G.mech ? `기계식 주차타워 ${G.towers.length}기 · 탑마다 ${G.NL}단 · 주차면 ${S.total}면 — 입고실에 세우면 승강기가 칸에 넣습니다`
+      : `${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · 경사로 최대 ${fmt1(G.grade * 100)}%`, 4);
     this.updMode();
   },
 

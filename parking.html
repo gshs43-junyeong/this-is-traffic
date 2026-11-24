@@ -90,7 +90,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 .doc .ref{color:#69728a;font-size:11.5px}
 @media(max-width:760px){
   #flowBox,#keys,#perf,#clock,[data-speed="2"],[data-speed="10"],#hwLink,#bHeat,#bInc,[data-mode="driver"]{display:none}
-  #lvBox{left:8px;top:8px;width:150px;padding:8px 9px;max-height:42%}
+  #lvBox{left:8px;top:8px;width:150px;padding:8px 9px;max-height:32%;display:flex;flex-direction:column}
+  #lvList{overflow-y:auto;min-height:0}
   #lvBox h3{display:none}
   #occAll{font-size:16px}
   .full{margin-bottom:5px;font-size:11px}
@@ -100,7 +101,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
   #bar .grp{padding:0 2px;gap:3px}
   #bar button,#bar select{font-size:11.5px;padding:5px 7px}
   #selBox{top:auto;bottom:118px;right:8px;width:200px}
-  #toast{top:auto;bottom:130px;font-size:12px}
+  #toast{top:auto;bottom:178px;font-size:12px;white-space:normal;width:max-content;max-width:calc(100% - 32px);text-align:center}
 }
 </style>
 </head>
