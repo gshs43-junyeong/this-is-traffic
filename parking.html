@@ -163,6 +163,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <button data-preset="mixed">복합 (지상 4 · 지하 2)</button>
         <button data-preset="rush">출근 몰림 (입차 520대/시)</button>
         <button data-preset="leave">퇴근 몰림 (출차 600대/시)</button>
+        <button data-preset="office">업무시설 하루 (07시~, 출근 · 퇴근)</button>
         <button data-preset="mech">기계식 주차타워 (4기 × 12단)</button>
       </div>
       <div class="sect">규모</div>
@@ -181,6 +182,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
       <div class="grid">
         <div class="fld"><label>들어오는 차 <span class="val" id="v_inRate"></span></label><input type="range" id="c_inRate" min="0" max="900" step="10"><div class="hint">앞 도로에서 주차하러 오는 차 (포아송 도착).</div></div>
         <div class="fld"><label>나가는 차 <span class="val" id="v_outRate"></span></label><input type="range" id="c_outRate" min="0" max="900" step="10"><div class="hint">세워 둔 차 가운데 출차를 시작하는 차 (45 초 넘게 세운 차 중 무작위).</div></div>
+        <div class="fld"><label>수요 형태</label><select id="c_pattern"><option value="flat">일정 (설정값 그대로)</option><option value="office">하루 — 업무시설 (출근 8~9 시 입차 · 퇴근 18~19 시 출차)</option><option value="shop">하루 — 상가 · 쇼핑 (오후 · 저녁에 몰림)</option></select><div class="hint">하루 형태에서는 위 입차 · 출차 값이 그날 가장 붐비는 시각의 대/시이고, 시계는 아침 7 시에서 시작한다. 해가 지면 저절로 야간이 된다.</div></div>
         <div class="fld"><label>앞 도로 통과 교통 <span class="val" id="v_thruRate"></span></label><input type="range" id="c_thruRate" min="0" max="900" step="20"><div class="hint">입구 대기열이 도로로 넘치면 통과 차도 막힌다.</div></div>
         <div class="fld"><label>지나치는 대기열 길이 <span class="val" id="v_balk"></span></label><input type="range" id="c_balk" min="2" max="20" step="1"><div class="hint">입구 앞 대기 차가 이만큼이면 새로 온 차는 들어가지 않고 지나간다.</div></div>
       </div>

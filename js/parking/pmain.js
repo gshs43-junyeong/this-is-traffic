@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp',
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat',
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -14,6 +14,7 @@ const PPRESETS = {
   mixed: { W: 64, D: 52, U: 4, B: 2, inRate: 220, outRate: 200, initOcc: 0.55, label: '복합' },
   rush: { W: 64, D: 52, U: 3, B: 2, inRate: 520, outRate: 60, initOcc: 0.7, label: '출근 몰림' },
   leave: { W: 64, D: 52, U: 3, B: 2, inRate: 40, outRate: 600, initOcc: 0.95, label: '퇴근 몰림' },
+  office: { W: 64, D: 52, U: 3, B: 2, inRate: 300, outRate: 300, initOcc: 0.05, pattern: 'office', label: '업무시설 하루' },
   mech: { kind: 'mech', W: 40, D: 52, U: 12, B: 0, inRate: 120, outRate: 100, initOcc: 0.6, label: '기계식 주차타워' },
 };
 
@@ -290,7 +291,7 @@ const PApp = {
     $('#bApply').onclick = () => { this.readPanel(true); this.panel(false); this.rebuild(); };
     for (const b of $$('[data-preset]')) b.onclick = () => {
       const p = PPRESETS[b.dataset.preset];
-      Object.assign(this.cfg, { kind: 'ramp' }, p); delete this.cfg.label;
+      Object.assign(this.cfg, { kind: 'ramp', pattern: 'flat' }, p); delete this.cfg.label;
       this.fillPanel(); this.readPanel(true); this.panel(false); this.rebuild();
     };
     // 수요 · 운영 값은 다시 짓지 않고 바로 반영
@@ -298,7 +299,7 @@ const PApp = {
       const el = $('#c_' + id);
       el.addEventListener('input', () => { this.readPanel(false); this.live(); });
     }
-    for (const id of ['guide', 'gate']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
+    for (const id of ['guide', 'gate', 'pattern']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
     $('#c_kind').addEventListener('change', () => this.est());
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
     this.setSpeed(1);
@@ -361,6 +362,7 @@ const PApp = {
     }
     $('#c_guide').checked = !!c.guide;
     $('#c_gate').value = c.gate;
+    $('#c_pattern').value = c.pattern || 'flat';
     $('#c_lanes').value = String(c.lanes || 1);
     $('#c_kind').value = c.kind || 'ramp';
     this.est();
@@ -373,7 +375,7 @@ const PApp = {
       if (all || !['W', 'D', 'U', 'B', 'initOcc', 'seed'].includes(k)) c[k] = v;
       const o = $('#v_' + k); if (o) o.textContent = this.fields[k][0](v);
     }
-    c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value;
+    c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value; c.pattern = $('#c_pattern').value;
     if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; }
     this.est();
     this.save();
@@ -427,7 +429,11 @@ const PApp = {
     st('#sQueue', S.queueAvg ? mmss(S.queueAvg) : '—');
     st('#sIO', `${S.inN} / ${S.outN}`);
     st('#sLost', `${S.lost} / ${S.gaveUp}` + (S.unjam ? ` · 교착 ${S.unjam}` : ''));
-    st('#clock', mmss(this.sim.time) + (this.speed > 1 ? ` · ×${this.speed}` : ''));
+    const pat = this.cfg.pattern && this.cfg.pattern !== 'flat';
+    if (pat) { const h = this.sim.hour(); st('#clock', `${pad2(Math.floor(h))}:${pad2(Math.floor((h % 1) * 60))}` + (this.speed > 1 ? ` · ×${this.speed}` : '')); }
+    else st('#clock', mmss(this.sim.time) + (this.speed > 1 ? ` · ×${this.speed}` : ''));
+    // 하루 패턴이면 해 질 무렵 · 새벽에 저절로 주야를 바꾼다
+    if (pat) { const h = this.sim.hour(), dark = h >= 19.3 || h < 6.2; if (dark !== !!this.night) this.toggleNight(); }
     st('#perf', `${(this.drawMs || 0).toFixed(1)} ms · 계산 ${(this.simMs || 0).toFixed(1)} ms · ${this.sim.cars.length} 대`);
     // 선택한 차
     const v = this.sel, box = $('#selBox');

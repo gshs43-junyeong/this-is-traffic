@@ -90,6 +90,24 @@ class ParkSim {
     for (const v of cand) { if (k >= n) break; this.callDriver(v); k++; }
     return k;
   }
+  /** 시각 (0~24 h) — 하루 패턴은 아침 7 시에서 시작한다 */
+  hour() { return ((this.cfg.pattern && this.cfg.pattern !== 'flat' ? 7 : 0) + this.time / 3600) % 24; }
+  /** 시각별 수요 비율 (최대 1). 업무시설: 출근 8~9 시 · 퇴근 18~19 시, 상가: 오후 · 저녁 */
+  profile() {
+    const P = this.cfg.pattern;
+    if (!P || P === 'flat') return { in: 1, out: 1, thru: 1 };
+    const h = this.hour(), g = (c, w) => Math.exp(-0.5 * ((h - c) / w) ** 2);
+    if (P === 'office') return {
+      in: Math.min(1, 0.03 + g(8.4, 0.7) + 0.1 * g(13.1, 0.5) + 0.06 * g(19.5, 1.2)),
+      out: Math.min(1, 0.015 + g(18.3, 0.8) + 0.08 * g(12.1, 0.5) + 0.03 * g(15, 2)),
+      thru: Math.min(1, 0.25 + 0.75 * Math.max(g(8.3, 1.2), g(18.3, 1.3))),
+    };
+    return {          // 상가 · 쇼핑
+      in: Math.min(1, 0.03 + 0.55 * g(12.3, 1.2) + g(16.5, 2.0) + 0.6 * g(19.5, 1.2)),
+      out: Math.min(1, 0.03 + 0.45 * g(14, 1.3) + 0.9 * g(18.8, 2.0) + 0.7 * g(21.2, 0.9)),
+      thru: Math.min(1, 0.3 + 0.7 * g(17.5, 3)),
+    };
+  }
   nextExp(rate) { return rate > 0 ? this.rng.exp(3600 / rate) : Infinity; }
 
   /* ---------- 시작 점유 ---------- */
@@ -137,12 +155,15 @@ class ParkSim {
     const G = this.G, cfg = this.cfg;
     this.time += dt;
     // 도착 — 주차하러 오는 차 · 통과 교통
-    if (this.time >= this.tIn) { this.pending++; this.tIn = this.time + this.nextExp(cfg.inRate); }
+    /* 하루 패턴이면 설정값을 최대치로 두고 시각별 비율로 솎아 낸다(비균질 포아송 — thinning) */
+    const pf = this.profile();
+    if (this.time >= this.tIn) { if (this.rng.next() < pf.in) this.pending++; this.tIn = this.time + this.nextExp(cfg.inRate); }
     if (this.pending > 0 && this.spawn(G.streetIn, 'park')) this.pending--;
     if (this.batch > 0) { const v = this.spawn(G.streetIn, 'park'); if (v) { v.noBalk = true; this.batch--; } }   // 일부러 보낸 차는 지나치지 않는다
-    if (this.time >= this.tThru) { if (this.spawn(G.streetIn, 'thru')) this.tThru = this.time + this.nextExp(cfg.thruRate); }
-    if (this.time >= this.tThruE) { if (this.spawn(G.streetEB, 'thru')) this.tThruE = this.time + this.nextExp(cfg.thruRate); }
+    if (this.time >= this.tThru) { if (this.rng.next() > pf.thru || this.spawn(G.streetIn, 'thru')) this.tThru = this.time + this.nextExp(cfg.thruRate); }
+    if (this.time >= this.tThruE) { if (this.rng.next() > pf.thru || this.spawn(G.streetEB, 'thru')) this.tThruE = this.time + this.nextExp(cfg.thruRate); }
     // 출차 요청 — 세워 둔 차 하나를 고른다
+    if (this.time >= this.tOut && this.rng.next() >= pf.out) this.tOut = this.time + this.nextExp(cfg.outRate);
     if (this.time >= this.tOut) {
       this.tOut = this.time + this.nextExp(cfg.outRate);
       // 무작위로 몇 번 뽑아 보고(수천 대를 매번 훑지 않게), 안 되면 전부 훑는다
