@@ -666,7 +666,7 @@ const PApp = {
       const pst = v.delay > 0 ? '차에서 내리는 중' : v.hold ? (at ? '로비에서 차를 기다리는 중' : '로비로 걸어가는 중') : v.toCar ? '차로 걸어가는 중' : mech ? '밖으로 걸어 나가는 중' : '계단실로 걸어가는 중';
       box.innerHTML = `<h3>운전자${v.car ? ' (' + v.car.cls.name + ' #' + v.car.id + ')' : ''}</h3><div class="row"><span class="k">상태</span><span class="v">${pst}</span></div>` +
         `<div class="row"><span class="k">층</span><span class="v">${this.lvName(v.z)}</span></div>` +
-        `<div class="row"><span class="k">걷는 속도</span><span class="v">${fmt1(v.sp * 3.6)} km/h</span></div><div class="hint">${mech ? '차가 내려와 돌면 걸어가 탑니다' : '계단실에 닿으면 차 위로 돌아갑니다'}</div>`;
+        `<div class="row"><span class="k">걷는 속도</span><span class="v">${fmt1(v.sp * 3.6)} km/h</span></div><div class="hint">${v.toCar ? '차에 타면 그 차를 따라갑니다' : mech ? '차가 내려와 돌면 걸어가 탑니다' : '계단실에 닿으면 차 위로 돌아갑니다'}</div>`;
     } else if (v && v.mode !== 'done') {
       box.style.display = 'block';
       const T = v.stall && v.stall.tower, qi = T ? T.q.indexOf(v) : -1;
