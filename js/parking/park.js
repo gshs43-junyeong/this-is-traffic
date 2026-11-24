@@ -302,7 +302,7 @@ class ParkSim {
     }
     // ★ 면을 잡았거나 주차 계획이 있는 차는 포기시키지 않는다 — 계획(후진 대기 구간)을 쥔 채 포기하면 통로가 영영 막힌다
     // 도로에서 입구 차례를 기다리다 만차가 이어지면 포기하고 지나간다 (진입로에 들어선 차는 차단기 앞에서 기다린다)
-    if (v.role === 'park' && !v.inside && v.edge === this.G.streetIn && v.stopT > 45 && !this.admit()) {
+    if (v.role === 'park' && !v.inside && v.edge === this.G.streetIn && v.stopT > 45 && (v.stopT > 120 || !this.admit())) {
       v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; v.path = null; this.planAhead(v);
     }
     if (v.inside && v.searching && !v.giveUp && !v.stall && !v.plan && this.time - v.tGate > 720) {
