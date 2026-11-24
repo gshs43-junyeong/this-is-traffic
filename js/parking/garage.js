@@ -9,8 +9,9 @@
    배치 (평면, x = 가로 · y = 세로)
      서쪽 띠 [0, RW] 는 경사로 칸 — 오르는 경사로 A 와 내려가는 경사로 B 가 나란히 있다.
      층마다 일방통행 순환로: 아래 횡단통로(동쪽으로) → 동쪽 끝 통로(북쪽으로) →
-     위 횡단통로(서쪽으로) → 경사로 칸. 사이의 통로들은 위에서 아래로(남쪽으로) 흐르며
-     위 횡단통로에서 갈라져 아래 횡단통로로 합류한다.
+     위 횡단통로(서쪽으로) → 경사로 칸. 경사로 칸 바로 옆 첫 통로는 북쪽으로 흘러
+     아래 횡단통로에서 위 횡단통로로 바로 잇는 지름길이고(경사로를 갈아타는 차가 층을 한 바퀴
+     돌지 않게), 나머지 통로들은 위에서 아래로(남쪽으로) 흐른다.
      두 경사로 모두 위 횡단통로 끝에서 남쪽으로 들어가, A 는 한 층 위의 · B 는 한 층 아래의
      아래 횡단통로로 나온다. 그래서 한 층을 지나려면 그 층을 한 바퀴 돌아야 한다
      (실제 분리형 경사로 주차장의 동선).
@@ -227,10 +228,10 @@ function buildGarage(cfg) {
     const merges = [];
     if (i > 0 || NL === 1) merges.push({ x: PK.xa + r, k: 'A' });
     if (i < NL - 1) merges.push({ x: PK.xb + r, k: 'B' });
-    if (L.park) for (let j = 0; j < n - 1; j++) merges.push({ x: xi[j] + r, k: 'a' + j });
+    if (L.park) for (let j = 1; j < n - 1; j++) merges.push({ x: xi[j] + r, k: 'a' + j });
     merges.sort((p, q) => p.x - q.x);
     const diverges = [];   // 위 횡단통로 (서쪽으로 가며 만나는 순)
-    if (L.park) for (let j = n - 2; j >= 0; j--) diverges.push({ x: xi[j] + r, k: 'a' + j });
+    if (L.park) for (let j = n - 2; j >= 1; j--) diverges.push({ x: xi[j] + r, k: 'a' + j });
     if (hasB(i)) diverges.push({ x: PK.xb + r, k: 'B' });
     if (hasA(i) || NL === 1) diverges.push({ x: PK.xa + r, k: 'A' });
     const xs = merges[0].x, xend = diverges[diverges.length - 1].x;
@@ -239,6 +240,10 @@ function buildGarage(cfg) {
     // 분기 · 합류 위치 (경로 위 거리)
     const marks = [];
     for (const m of merges) if (m.x > xs + 0.01) marks.push({ s: m.x - xs, kind: 'm', k: m.k });
+    if (L.park) {            // 북쪽 지름길 통로 (첫 통로)
+      marks.push({ s: (xi[0] - r) - xs, kind: 'd', k: 'a0' });
+      marks.push({ s: Ltot - ((xi[0] - r) - xend), kind: 'm', k: 'a0' });
+    }
     if (isG) {
       marks.push({ s: (xx - r) - xs, kind: 'd', k: 'X' });
       marks.push({ s: (xf - r - xs) + Math.PI / 2 * r, kind: 'm', k: 'E' });
@@ -269,9 +274,12 @@ function buildGarage(cfg) {
     if (!G.levels[i].park) continue;
     const z = zLv(i);
     for (let j = 0; j < n - 1; j++) {
-      const p = filletPath([[xi[j] + r, yt], [xi[j], yt], [xi[j], yb], [xi[j] + r, yb]], r);
+      const p = j === 0
+        ? filletPath([[xi[j] - r, yb], [xi[j], yb], [xi[j], yt], [xi[j] - r, yt]], r)
+        : filletPath([[xi[j] + r, yt], [xi[j], yt], [xi[j], yb], [xi[j] + r, yb]], r);
       const ed = addEdge('aisle', i, p.X, p.Y, 0, null, () => z, 2.8);
       link(ed, lvN[i]['da' + j], lvN[i]['ma' + j]);
+      if (j === 0) ed.north = true;
       G.aisles.push(ed);
     }
   }

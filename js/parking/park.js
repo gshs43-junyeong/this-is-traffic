@@ -370,7 +370,7 @@ class ParkSim {
       if (nd.ins.length > 1 && nd.res !== self) {
         const need = v.v * v.v / (2 * 1.4) + 5;
         // 줄의 맨 앞 차만 예약한다 (뒤차가 먼저 잡으면 앞차가 못 들어가 서로 막힌다)
-        if (!nd.res && !leaderFound && dN < need && this.canEnter(v, ed, nd, v.mWait > 3)) { nd.res = self; v.res.push(nd); v.mWait = 0; }
+        if (!nd.res && !leaderFound && dN < need && this.canEnter(v, ed, nd, v.mWait > 3, k)) { nd.res = self; v.res.push(nd); v.mWait = 0; }
         if (nd.res !== self) {
           obst(Math.max(0.05, dN - 0.6), 0, nd);
           if (dN < 4 && v.v < 0.4) v.mWait = (v.mWait || 0) + PDT;    // 합류를 기다린 시간 — 길어지면 끼어든다(지퍼)
@@ -391,13 +391,17 @@ class ParkSim {
     return clamp(acc, -7, v.a);
   }
   /** 합류 간격 수락 + 나가는 쪽 여유 */
-  canEnter(v, ed, nd, urgent) {
-    const out = nd.outs[0];
-    if (out) {
+  canEnter(v, ed, nd, urgent, k) {
+    // 나가는 쪽 여유 — 내 경로를 따라 차 길이 + 1 m 안에 선 차나 막힌 구간이 있으면 들어가지 않는다
+    const need = v.len + 1.0;
+    let off = 0;
+    for (let i = k + 1; i < v.route.length && off < need; i++) {
+      const out = v.route[i];
       let tail = Infinity;
-      for (const c of out.cars) if (c.s - c.len < tail) tail = c.s - c.len;
-      for (const b of out.blk) if (b.own !== v && b.s0 < tail) tail = b.s0;
-      if (tail < v.len + 1.0) return false;
+      for (const c of out.cars) if (c !== v && c.s - c.len < tail) tail = c.s - c.len;
+      for (const b of out.blk) if (b.own !== v && !(b.own.mode === 'drive' && b.own.edge === out) && b.s0 < tail) tail = b.s0;
+      if (off + tail < need) return false;
+      off += out.len;
     }
     const major = nd.ins.find((e) => e.kind === 'loop' || e.kind === 'street');
     if (major && major !== ed) {
