@@ -457,6 +457,20 @@ function placeStalls(G) {
       }
     }
   }
+  /* 전용 구획 — 층마다 (주차장법 · 친환경자동차법 비율에 맞춘다)
+     장애인전용 3 % (계단 · 승강기 동에 가장 가깝게), 전기차 충전 5 % (그다음 가까운 곳),
+     경형 10 % (나머지 가운데 고르게 흩어). 크기는 일반형과 같게 두고 표시와 이용 규칙만 다르다 */
+  for (let i = 0; i < NL; i++) {
+    const ss = G.stalls.filter((s) => s.level === i);
+    if (!ss.length) continue;
+    const d = (s) => Math.hypot(s.cx - xf, s.cy - D);
+    ss.sort((a, b) => d(a) - d(b));
+    const nDis = Math.max(1, Math.round(ss.length * 0.03)), nEv = Math.max(1, Math.round(ss.length * 0.05));
+    ss.forEach((s, k) => { s.type = k < nDis ? 'dis' : k < nDis + nEv ? 'ev' : 'gen'; });
+    const rest = ss.filter((s) => s.type === 'gen');
+    const nMini = Math.round(ss.length * 0.10), step = rest.length / Math.max(1, nMini);
+    for (let k = 0; k < nMini; k++) rest[Math.floor(k * step + step * 0.5) % rest.length].type = 'mini';
+  }
 }
 
 /** 최단경로 (간선 길이 + 경사로 가중) — from 노드에서 목표 간선까지 간선 목록 */

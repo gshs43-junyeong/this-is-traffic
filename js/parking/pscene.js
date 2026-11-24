@@ -234,6 +234,19 @@ const PScene = {
         // 면 앞 끝선 (통로 경계) — 짧은 끝 표시
         const fx = s.cx - s.nx * 2.45, fy = s.cy - s.ny * 2.45;
         M.rect(fx, fy, z + 0.022, s.hdg + Math.PI / 2, 1.25, 0.05, PCOL.line);
+        // 전용 구획 — 바닥색과 충전기
+        if (s.type === 'dis' || s.type === 'ev') {
+          M.rect(s.cx, s.cy, z + 0.016, s.hdg, 2.4, 1.16, s.type === 'dis' ? '#2f5fa8' : '#2f8a55');
+          // 바닥 표지 (흰 네모 안 기호 대신 단순한 흰 판)
+          M.rect(s.cx - s.nx * 1.2, s.cy - s.ny * 1.2, z + 0.02, s.hdg, 0.45, 0.45, '#e8ecef');
+          if (s.type === 'ev') {            // 면 안쪽 끝의 충전기
+            const ex = s.cx + s.nx * 2.62, ey = s.cy + s.ny * 2.62, hw = 0.22, hd = 0.16;
+            M.box(ex - (s.nx ? hd : hw), ey - (s.nx ? hw : hd), z, ex + (s.nx ? hd : hw), ey + (s.nx ? hw : hd), z + 1.45, '#e9eeea', covered, true);
+            M.box(ex - (s.nx ? hd : hw) * 1.05, ey - (s.nx ? hw : hd) * 1.05, z + 1.1, ex + (s.nx ? hd : hw) * 1.05, ey + (s.nx ? hw : hd) * 1.05, z + 1.4, '#2fb36a', covered, true);
+          }
+        } else if (s.type === 'mini') {
+          M.rect(s.cx + s.nx * 0.5, s.cy + s.ny * 0.5, z + 0.016, s.hdg, 1.9, 1.05, '#8a8452');
+        }
         // 바퀴 멈춤턱
         const bx = s.cx + s.nx * 1.75, by = s.cy + s.ny * 1.75;
         M.rect(bx, by, z + 0.05, s.hdg + Math.PI / 2, 0.75, 0.09, shade('#c9c4b4', 0.9));

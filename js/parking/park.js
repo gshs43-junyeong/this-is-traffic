@@ -28,9 +28,9 @@ const V_MAN_F = 1.35, V_MAN_R = 0.85;
 
 let carSeq = 0;
 class PCar {
-  constructor(sim, role) {
+  constructor(sim, role, forceKey) {
     const rng = sim.rng;
-    const c = rng.weighted(PCLASS.map((k) => [k, k.share]));
+    const c = forceKey ? PCLASS.find((k) => k.key === forceKey) : rng.weighted(PCLASS.map((k) => [k, k.share]));
     this.id = ++carSeq; this.cls = c; this.role = role;
     this.len = c.len * rng.range(0.97, 1.03); this.wid = c.wid; this.hei = c.hei;
     this.wb = this.len * 0.6; this.ohF = this.len * 0.2; this.ohR = this.len * 0.2;
@@ -51,7 +51,20 @@ class PCar {
     this.t0 = sim.time; this.tGate = 0; this.tPark = 0; this.tReq = 0; this.waitT = 0; this.stopT = 0;
     this.searching = false; this.leaving = false; this.pref = 1;
     this.blinkPhase = rng.next();
+    // 전용 구획 자격 — 장애인 표지 4 %, 전기차 15 % (경차 제외), 경형 구획은 경차만
+    this.dis = rng.chance(0.04); this.ev = c.key !== 'mini' && rng.chance(0.15);
+    this.rude = rng.chance(0.04);          // 전용 구획을 무시하는 운전자
   }
+}
+
+/** 이 차가 이 면을 써도 되는가 (전용 구획) */
+function stallOk(v, s) {
+  if (!s.type || s.type === 'gen') return true;
+  if (v.rude) return s.type !== 'dis';
+  if (s.type === 'dis') return v.dis;
+  if (s.type === 'ev') return v.ev;
+  if (s.type === 'mini') return v.cls.key === 'mini';
+  return true;
 }
 
 class ParkSim {
@@ -85,8 +98,13 @@ class ParkSim {
     for (let i = st.length - 1; i > 0; i--) { const j = Math.floor(this.rng.next() * (i + 1)); const t = st[i]; st[i] = st[j]; st[j] = t; }
     const n = Math.round(st.length * clamp(frac, 0, 1));
     for (let i = 0; i < n; i++) {
-      const v = new PCar(this, 'park');
-      this.parkAt(v, st[i], this.rng.chance(this.cfg.revShare) ? 'out' : 'in');
+      const s = st[i];
+      // 전용 구획에는 자격 있는 차를 — 장애인전용은 절반쯤 비워 둔다
+      if (s.type === 'dis' && this.rng.chance(0.5)) continue;
+      const v = new PCar(this, 'park', s.type === 'mini' ? 'mini' : null);
+      if (s.type === 'dis') v.dis = true;
+      if (s.type === 'ev') v.ev = true;
+      this.parkAt(v, s, this.rng.chance(this.cfg.revShare) ? 'out' : 'in');
       v.tPark = -this.rng.range(0, 3600);
       this.cars.push(v);
     }
@@ -232,7 +250,7 @@ class ParkSim {
     for (const e of nd.outs) {
       if (e.kind === 'aisle' && !v.visited.has(e.id) && !v.seen.has('g' + e.id)) {
         v.seen.add('g' + e.id);
-        let free = 0; for (const s of e.stalls) if (s.state === 'free' || (s.state === 'leave' && s.car && !s.car.driverAway)) free++;
+        let free = 0; for (const s of e.stalls) if ((s.state === 'free' || (s.state === 'leave' && s.car && !s.car.driverAway)) && stallOk(v, s)) free++;
         if (!free && rng.chance(0.75)) v.visited.add(e.id);
         else if (free) v.seen.add('f' + e.id);
       }
@@ -565,7 +583,7 @@ class ParkSim {
     }
     let best = null, bc = Infinity;
     for (const s of G.stalls) {
-      if (s.state !== 'free') continue;
+      if (s.state !== 'free' || !stallOk(v, s)) continue;
       const c = G._dEnt.get(s.ed.id) + s.s + this.rng.range(0, 25);
       if (c < bc) { bc = c; best = s; }
     }
@@ -595,6 +613,7 @@ class ParkSim {
       if (v.seen.has(s.id)) continue;
       // 나가려는 차는 운전자가 타서 깜빡이를 켰을 때만 '곧 빈다'로 보인다
       if (s.state !== 'free' && !(s.state === 'leave' && !s.next && s.car && !s.car.driverAway)) continue;
+      if (!stallOk(v, s)) continue;
       v.seen.add(s.id);
       if (!this.rng.chance(s.state === 'leave' ? 0.7 : 0.92)) continue;
       if (s.state === 'leave') {
