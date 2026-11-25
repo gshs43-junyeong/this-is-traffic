@@ -146,7 +146,7 @@ const PApp = {
       const inside = s.z > -900 && x > -1 && x < G.W + 1 && y > -1 && y < G.D + 1;
       if (!ped && s.edge && s.edge.helix && G.hx) {
         /* 꼬불이 위 — 뒤로 물러나면 원통 벽에 가린다. 나선 안쪽 가장자리(기둥 곁)에서 조금 뒤 · 머리 위 한 층 아래 높이로 */
-        const c = s.edge.kind === 'rampA' ? G.hx.A : G.hx.B, ang = Math.atan2(s.y - c.y, s.x - c.x) + (s.edge.kind === 'rampA' ? -0.5 : 0.5);
+        const c = s.edge.kind === 'rampA' ? G.hx.A : G.hx.B, ang = Math.atan2(s.y - c.y, s.x - c.x) - 0.5;   // 두 탑 다 시계 반대 방향
         x = c.x + (G.hx.Rc + 0.45) * Math.cos(ang); y = c.y + (G.hx.Rc + 0.45) * Math.sin(ang); z = s.z + 2.0;
       } else if (inside) {
         x = clamp(x, 0.6, G.W - 0.6); y = clamp(y, 0.6, G.D - 0.6);
@@ -420,7 +420,7 @@ const PApp = {
       V.push([base.gate === 'lpr' ? '주차권 · 출구 정산' : '번호판 인식', { gate: base.gate === 'lpr' ? 'ticket' : 'lpr' }]);
       V.push([(base.lanes | 0) >= 2 ? '차단기 1차로' : '차단기 2차로', { lanes: (base.lanes | 0) >= 2 ? 1 : 2 }]);
       V.push([(base.throat | 0) > 0 ? '진입 완충 없음' : '진입 완충 25 m', { throat: (base.throat | 0) > 0 ? 0 : 25 }]);
-      V.push([base.ramp === 'helix' ? '평행 경사로' : '꼬불이 (규모가 작으면 늘려 짓는다)', { ramp: base.ramp === 'helix' ? 'straight' : 'helix' }]);
+      V.push([base.ramp === 'helix' ? '평행 경사로' : '꼬불이 (세로가 짧으면 늘려 짓는다)', { ramp: base.ramp === 'helix' ? 'straight' : 'helix' }]);
     }
     const rows = [], DUR = 3600, run = this.pvRun = (this.pvRun || 0) + 1;   // 멈추고 곧바로 다시 눌러도 옛 계산이 끼어들지 않게
     let vi = -1, sim = null, t = 0, qMax = 0;
@@ -606,7 +606,7 @@ const PApp = {
       }
       const g = buildGarage({ W, D, U, B, seed: 1, throat: +$('#c_throat').value, ramp: $('#c_ramp').value });
       $('#estOut').textContent = `${g.levels[0].name}~${g.levels[g.NL - 1].name} (${g.NL}개 층) · 주차면 ${g.stalls.length}면 · 층당 약 ${Math.round(g.stalls.length / Math.max(1, g.levels.filter((l) => l.park).length))}면 · ` +
-        (g.hx ? `꼬불이 반경 ${fmt1(g.hx.R)} m · 한 층 한 바퀴 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %` + (g.W > W || g.D > D ? ` — 꼬불이는 가로 ${g.W} · 세로 ${g.D} m 로 늘려 짓는다` : '')
+        (g.hx ? `꼬불이 탑 둘(상행 · 하행, 지름 ${fmt1(2 * g.hx.Rt)} m) · 내변반경 ${fmt1(g.hx.Ri)} m · 한 층 나선 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %` + (g.D > D ? ` — 꼬불이는 세로 ${g.D} m 로 늘려 짓는다` : '')
           : `경사로 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %`);
     } catch (e) { $('#estOut').textContent = '배치 불가: ' + e.message; }
   },
@@ -752,7 +752,14 @@ const PApp = {
         const parts = [];
         if (i < G.NL - 1) parts.push(['▲ ' + G.levels[i + 1].name, '#9fd8ff']);
         if (i > 0) parts.push(['▼ ' + G.levels[i - 1].name, '#ffd59f']);
-        const q = parts.length && (G.hx ? Render.point(G.xa, G.yt - 2, L.z + 1.8) : Render.point(PK.RW / 2, G.y_rt - 3, L.z + 1.8));
+        // 꼬불이는 탑마다 이름표 (출입구 위)
+        if (G.hx) for (const [c, t, col] of [[G.hx.A, i < G.NL - 1 ? '▲ 상행 꼬불이' : '', '#9fd8ff'], [G.hx.B, i > 0 ? '▼ 하행 꼬불이' : '', '#ffd59f']]) {
+          const p = t && Render.point(c.x + G.hx.Rt, c.y, L.z + 3.2);
+          if (!p) continue;
+          const w = ctx.measureText(t).width + 12;
+          ctx.fillStyle = '#10141bcc'; ctx.fillRect(p.x - w / 2, p.y - 9, w, 18); ctx.fillStyle = col; ctx.fillText(t, p.x, p.y);
+        }
+        const q = parts.length && !G.hx && Render.point(PK.RW / 2, G.y_rt - 3, L.z + 1.8);
         if (q) {
           const ws = parts.map(([t]) => ctx.measureText(t).width), gap = 10;
           const tw = ws.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 12;

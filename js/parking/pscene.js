@@ -165,7 +165,8 @@ const PScene = {
     const topUnder = G.U === 0;        // 지상 주차가 없으면 G 층 자체가 광장(지면)
     A.quad([-big, D, gz], [W + big, D, gz], [W + big, D + big, gz], [-big, D + big, gz], NX(PCOL.ground));
     A.quad([-big, -big, gz], [W + big, -big, gz], [W + big, 0, gz], [-big, 0, gz], NX(PCOL.ground));
-    A.quad([-big, 0, gz], [0, 0, gz], [0, D, gz], [-big, D, gz], NX(PCOL.ground));
+    if (G.hx) this.groundAroundTowers(A, big, gz);
+    else A.quad([-big, 0, gz], [0, 0, gz], [0, D, gz], [-big, D, gz], NX(PCOL.ground));
     A.quad([W, 0, gz], [W + big, 0, gz], [W + big, D, gz], [W, D, gz], NX(PCOL.ground));
     const ys = PK.ys, yF = G.yFar, yC = G.yCenter, nR = G.road || 1;
     A.quad([-big, yF, 0.0], [W + big, yF, 0.0], [W + big, ys + 1.75, 0.0], [-big, ys + 1.75, 0.0], NX(PCOL.asphalt));
@@ -209,7 +210,7 @@ const PScene = {
       const zb = G.levels[0].z - SL - 0.4, t = 0.4, wc = shade(PCOL.wallUnder, 0.8);
       A.box(-t, -t, zb, W + t, 0, -0.03, wc, true, true);
       A.box(-t, D, zb, W + t, D + t, -0.03, wc, true, true);
-      A.box(-t, 0, zb, 0, D, -0.03, wc, true, true);
+      for (const [a, b] of G.hx ? this.towerGapsY(0, D) : [[0, D]]) A.box(-t, a, zb, 0, b, -0.03, wc, true, true);
       A.box(W, 0, zb, W + t, D, -0.03, wc, true, true);
       A.quad([-t, -t, zb], [W + t, -t, zb], [W + t, D + t, zb], [-t, D + t, zb], '#3a3c3a');
     }
@@ -249,7 +250,7 @@ const PScene = {
       const ft = faceLit(0, 0, 1, covered) / faceLit(0, 0, 1, true);
       const top = covered ? shade(slabC, covered === 2 ? 0.82 : 1) : NX(shade(slabC, plaza ? 1 : 1.05));
       // 슬래브 — 경사로 구멍을 빼고 세 판 (꼬불이는 원통 구멍을 뺀 경사로 칸 조각들)
-      const rects = G.hx ? [[RW, 0, W, D], ...this.helixSlab()] : [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
+      const rects = G.hx ? [[0, 0, W, D]] : [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
       for (const [x0, y0, x1, y1] of rects) {
         M.quad([x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z], top);
         if (i > 0) M.quad([x0, y0, z - SL], [x1, y0, z - SL], [x1, y1, z - SL], [x0, y1, z - SL], PCOL.ceil);
@@ -264,7 +265,7 @@ const PScene = {
       // 통로 바닥 (에폭시) — 순환로 · 통로
       for (const ed of G.edges) {
         if (ed.level !== i || (ed.kind !== 'loop' && ed.kind !== 'aisle')) continue;
-        if (ed.flatReturn) { this.ribbon(M, ed, 0, ed.len, PK.laneW / 2, 0.012, PCOL.ramp, covered); continue; }
+        if (ed.flatReturn || ed.westLane) { this.ribbon(M, ed, 0, ed.len, PK.laneW / 2, 0.012, PCOL.ramp, covered); continue; }
         this.ribbon(M, ed, 0, ed.len, PK.aisle / 2, 0.012, aisleC, covered);
       }
       // 주차선 (면 양옆, 이웃과 겹치는 선은 한 번만)
@@ -317,7 +318,9 @@ const PScene = {
         // 계단실 문 (북쪽 벽, 탑의 남쪽 면)
         M.quad([G.core.x - 0.7, D - 0.005, z], [G.core.x + 0.7, D - 0.005, z], [G.core.x + 0.7, D - 0.005, z + 2.15], [G.core.x - 0.7, D - 0.005, z + 2.15], '#3d5a52');
         M.quad([G.core.x - 0.35, D - 0.02, z + 2.25], [G.core.x + 0.35, D - 0.02, z + 2.25], [G.core.x + 0.35, D - 0.02, z + 2.5], [G.core.x - 0.35, D - 0.02, z + 2.5], '#2fbf62');
-        M.box(0, 0, z, t, D, z + (L.under || covered ? H - SL : 1.1), wc, covered, true);
+        const wH = L.under || covered ? H - SL : 1.1;
+        if (G.hx) for (const [a, b] of this.towerGapsY(0, D)) M.box(0, a, z, t, b, z + wH, wc, covered, true);
+        else M.box(0, 0, z, t, D, z + wH, wc, covered, true);
         M.box(W - t, 0, z, W, D, z + wallH, wc, covered, true);
         if (!L.under && covered) {            // 지상층 띠벽 (위층 슬래브 아래 차양)
           M.box(-0.05, -0.05, z + H - SL - 0.55, W + 0.05, 0.12, z + H - SL, shade(PCOL.wall, 0.96), covered, false);
@@ -348,12 +351,12 @@ const PScene = {
            ★ 칸 전체를 상자로 덮으면 차가 그 속으로 드나드는 것처럼 보였다 (꼬불이는 원통 난간이 이 몫) */
         this.plazaRamp(M, z);
       }
-      // 경사로 칸 벽 (주차 구역과 경계) · 두 경사로 분리벽
-      if (i < G.NL - 1) {
+      // 경사로 칸 벽 (주차 구역과 경계) · 두 경사로 분리벽 — 꼬불이는 경사로가 건물 밖 탑이라 없다
+      if (i < G.NL - 1 && !G.hx) {
         M.box(RW - 0.15, G.y_rb, z, RW + 0.15, G.y_rt, z + H - SL, shade(wc, 0.98), covered, true);
-        if (!G.hx) M.box(3.62, G.y_rb, z - (i > 0 ? 0 : 0), 3.98, G.y_rt, z + H - SL, shade(wc, 0.92), covered, true);
+        M.box(3.62, G.y_rb, z - (i > 0 ? 0 : 0), 3.98, G.y_rt, z + H - SL, shade(wc, 0.92), covered, true);
       }
-      if (G.hx) this.helixShell(M, i, z, covered, wc, top);
+      if (G.hx) this.towerShell(M, i, z, L.under);
       // 천장 조명 (이 층 슬래브 아래 = 아래층의 천장) — 아래층이 덮여 있을 때
       if (i > 0) {
         for (const ed of G.edges) {
@@ -374,8 +377,8 @@ const PScene = {
       for (let k = 0; k < ed.n - 1; k++) {
         const za = ed.z[k], zb = ed.z[k + 1];
         if (Math.abs(za - zb) < 1e-4 && (Math.abs(za - z0) < 1e-3 || Math.abs(za - z1) < 1e-3)) {
-          // 평탄부는 슬래브가 덮는다 — 꼬불이 착지 차로가 원통 구멍을 지나는 곳만 그린다
-          if (!(ed.flat && this.inHelixHole((ed.x[k] + ed.x[k + 1]) / 2, (ed.y[k] + ed.y[k + 1]) / 2))) continue;
+          // 평탄부는 슬래브가 덮는다 — 꼬불이 탑 안(건물 밖)의 착지부 · 연결로만 그린다
+          if (!(ed.tower && (ed.x[k] + ed.x[k + 1]) / 2 < 0.05)) continue;
         }
         const g = this.lvAt(Math.min(za, zb) + 0.05);
         const M = part(g);
@@ -395,8 +398,8 @@ const PScene = {
             [ax + nax * w * 0.9 + Math.cos(ha) * 0.12, ay + nay * w * 0.9 + Math.sin(ha) * 0.12, za + 0.02], [ax + nax * w * 0.9, ay + nay * w * 0.9, za + 0.02], shade(PCOL.ramp, 0.86));
         }
       }
-      // 경사로 칸 평탄부의 차로 표시 (방향 화살표)
-      for (const s of [3, ed.len - 3]) {
+      // 경사로 칸 평탄부의 차로 표시 (방향 화살표) — 꼬불이는 나선 가운데에만 하나
+      for (const s of ed.tower ? (ed.helix && !ed.landing ? [ed.len / 2] : []) : [3, ed.len - 3]) {
         const q = ed.at(s);
         if (Math.abs(q.y - G.yt) < 3.5 || Math.abs(q.y - G.yb) < 3.5) continue;
         this.arrow(part(this.lvAt(q.z)), q.x, q.y, q.z + 0.03, q.h);
@@ -415,66 +418,66 @@ const PScene = {
     all.done();
     this.mesh = all; this.gStart = starts;      // 묶음 g(-1..) 은 [starts[g+1], starts[g+2])
   },
-  /* ---------- 꼬불이(나선형) ---------- */
-  /** 원통 구멍 안인가 (벽 바깥면 + 0.3) */
-  inHelixHole(x, y) {
-    const hx = this.G.hx;
-    for (const c of [hx.A, hx.B]) if (Math.hypot(x - c.x, y - c.y) < hx.Rw + 0.5) return true;
-    return false;
-  },
-  /** 경사로 칸 슬래브 — 1 m 칸을 원통 바깥만 줄마다 이어 붙인다. 원통 둘레 틈은 helixShell 의 테두리 판이 덮는다 */
-  helixSlab() {
-    const G = this.G, hx = G.hx, RW = G.RW, out = [], cut = hx.Rw + 0.2;
-    const clear = (x0, y0, x1, y1) => [hx.A, hx.B].every((c) => Math.hypot(clamp(c.x, x0, x1) - c.x, clamp(c.y, y0, y1) - c.y) > cut);
-    for (let y = 0; y < G.D; y += 1) {
-      const y1 = Math.min(G.D, y + 1);
-      let run = null;
-      for (let x = 0; x < RW - 1e-6; x += 1) {
-        const x1 = Math.min(RW, x + 1);
-        if (clear(x, y, x1, y1)) { if (run) run[2] = x1; else run = [x, y, x1, y1]; }
-        else if (run) { out.push(run); run = null; }
-      }
-      if (run) out.push(run);
-    }
+  /* ---------- 꼬불이 (건물 서쪽 벽 밖 나선 탑) ---------- */
+  /** 서쪽 벽을 탑 출입구 자리만 비운 y 구간들 */
+  towerGapsY(y0, y1) {
+    const hx = this.G.hx, gaps = [hx.A, hx.B].map((c) => [c.y - 4.0, c.y + 4.0]).sort((a, b) => a[0] - b[0]);
+    const out = []; let y = y0;
+    for (const [a, b] of gaps) { if (a > y) out.push([y, a]); y = Math.max(y, b); }
+    if (y < y1) out.push([y, y1]);
     return out;
   },
-  /** 층마다 원통 벽(착지 차로가 지나는 곳은 연다) · 가운데 기둥 · 구멍 테두리 판 */
-  helixShell(M, i, z, covered, wc, top) {
+  /** 건물 서쪽 지면 — 탑 둘레는 정사각형에서 원을 뺀 부채꼴 조각으로 (탑 속 나선이 땅속까지 보이게) */
+  groundAroundTowers(A, big, gz) {
+    const G = this.G, hx = G.hx, D = G.D, Rt = hx.Rt, x0 = hx.A.x - Rt, col = NX(PCOL.ground);
+    A.quad([-big, 0, gz], [x0, 0, gz], [x0, D, gz], [-big, D, gz], col);
+    const ys = [[hx.B.y - Rt, hx.B.y + Rt], [hx.A.y - Rt, hx.A.y + Rt]];
+    let y = 0;
+    for (const [a, b] of ys) { if (a > y) A.quad([x0, y, gz], [0, y, gz], [0, a, gz], [x0, a, gz], col); y = b; }
+    if (y < D) A.quad([x0, y, gz], [0, y, gz], [0, D, gz], [x0, D, gz], col);
+    for (const c of [hx.A, hx.B]) {
+      const n = 64;
+      for (let j = 0; j < n; j++) {
+        const a = (j / n) * 2 * Math.PI, b = ((j + 1) / n) * 2 * Math.PI;
+        const sq = (t) => { const ct = Math.cos(t), st = Math.sin(t), k = Rt / Math.max(Math.abs(ct), Math.abs(st)); return [c.x + ct * k, c.y + st * k]; };
+        const [ax, ay] = sq(a), [bx, by] = sq(b);
+        A.quad([c.x + Rt * Math.cos(a), c.y + Rt * Math.sin(a), gz], [ax, ay, gz], [bx, by, gz], [c.x + Rt * Math.cos(b), c.y + Rt * Math.sin(b), gz], col);
+      }
+    }
+  },
+  /** 탑 한 층 몫 — 바깥 원통 벽(출입구 자리는 문 높이까지 비우고 위는 인방), 가운데 기둥, 맨 아래층 바닥 */
+  towerShell(M, i, z, under) {
     const G = this.G, hx = G.hx, SL = PK.slab, NL = G.NL, H = G.H;
-    const roofTop = i === NL - 1 && !G.levels[i].under;
-    const hW = roofTop ? 1.1 : H - SL;             // 맨 위 지상층(옥상 · 광장)은 난간 높이
-    const seg = 56, open = 0.98;                   // 착지 차로가 벽을 지나는 각도 ±56°
-    for (const [c, a0, k] of [[hx.A, Math.PI, 'A'], [hx.B, 0, 'B']]) {
-      // 이 층에 들어오는 길(북쪽) · 나가는 길(남쪽)이 있는가
-      const inN = k === 'A' ? i < NL - 1 : i > 0, outS = k === 'A' ? i > 0 : i < NL - 1;
+    const top = i === NL - 1;
+    const z0 = z - SL, z1 = top ? z + (under ? H - SL : 1.1) : z + H - SL;   // 맨 위 지상층은 난간 높이에서 트인다
+    const door = z + 2.6, openA = Math.asin(4.0 / hx.Rt);                  // 출입구 — 연결로 두 차로(±3.6 m) 폭
+    const wc = under ? PCOL.wallUnder : PCOL.wall, seg = 72;
+    for (const c of [hx.A, hx.B]) {
       for (let j = 0; j < seg; j++) {
         const a = (j / seg) * 2 * Math.PI, b = ((j + 1) / seg) * 2 * Math.PI, m = (a + b) / 2;
-        const d = wrapPi(m - a0), north = Math.sin(m) > 0;
-        if (Math.abs(d) < open && ((north && inN) || (!north && outS))) continue;
-        const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
-        const r0 = hx.Rw, r1 = hx.Rw + 0.2;
-        const P = (r, cs, sn, zz) => [c.x + r * cs, c.y + r * sn, zz];
-        const fo = shade(wc, faceLit(Math.cos(m), Math.sin(m), 0, covered)), fi = shade(wc, faceLit(-Math.cos(m), -Math.sin(m), 0, covered) * 0.92);
-        M.quad(P(r1, ca, sa, z), P(r1, cb, sb, z), P(r1, cb, sb, z + hW), P(r1, ca, sa, z + hW), fo);
-        M.quad(P(r0, cb, sb, z), P(r0, ca, sa, z), P(r0, ca, sa, z + hW), P(r0, cb, sb, z + hW), fi);
-        M.quad(P(r0, ca, sa, z + hW), P(r1, ca, sa, z + hW), P(r1, cb, sb, z + hW), P(r0, cb, sb, z + hW), shade(wc, 1.05));
+        const inDoor = Math.abs(wrapPi(m)) < openA;          // 동쪽(건물 쪽) 출입구
+        const zs = inDoor ? Math.min(door, z1) : z0;
+        if (zs >= z1 - 0.01) continue;
+        const P = (r, t, zz) => [c.x + r * Math.cos(t), c.y + r * Math.sin(t), zz];
+        const fo = shade(wc, faceLit(Math.cos(m), Math.sin(m), 0, under ? 2 : 0)), fi = shade(wc, faceLit(-Math.cos(m), -Math.sin(m), 0, 1) * 0.9);
+        M.quad(P(hx.Rt, a, zs), P(hx.Rt, b, zs), P(hx.Rt, b, z1), P(hx.Rt, a, z1), fo);
+        M.quad(P(hx.Rw, b, zs), P(hx.Rw, a, zs), P(hx.Rw, a, z1), P(hx.Rw, b, z1), fi);
+        M.quad(P(hx.Rw, a, z1), P(hx.Rt, a, z1), P(hx.Rt, b, z1), P(hx.Rw, b, z1), shade(wc, 1.05));
+        if (inDoor) M.quad(P(hx.Rt, b, zs), P(hx.Rt, a, zs), P(hx.Rw, a, zs), P(hx.Rw, b, zs), shade(wc, 0.7));   // 인방 밑면
       }
-      // 구멍 테두리 판 — 1 m 칸 슬래브와 원통 벽 사이 틈을 덮는다 (바닥 높이)
-      for (let j = 0; j < seg; j++) {
-        const a = (j / seg) * 2 * Math.PI, b = ((j + 1) / seg) * 2 * Math.PI;
-        const r0 = hx.Rw + 0.2, r1 = hx.Rw + 1.7;
-        // ★ 건물 밖(서쪽 벽 · 경사로 칸 동쪽 벽 너머)으로 나가지 않게 자른다 — 안 자르면 바깥에서 층마다 원판이 비어져 보였다
-        const P = (r, t, zz) => [clamp(c.x + r * Math.cos(t), 0.22, G.RW), clamp(c.y + r * Math.sin(t), 0, G.D), zz];
-        M.quad(P(r0, a, z + 0.004), P(r1, a, z + 0.004), P(r1, b, z + 0.004), P(r0, b, z + 0.004), top);
-        if (i > 0) M.quad(P(r0, b, z - SL), P(r1, b, z - SL), P(r1, a, z - SL), P(r0, a, z - SL), PCOL.ceil);
-      }
-      // 가운데 기둥 (속이 찬 원기둥) — 층마다 한 토막
-      const cz1 = z + (roofTop ? 1.1 : H);
-      for (let j = 0; j < 28; j++) {
-        const a = (j / 28) * 2 * Math.PI, b = ((j + 1) / 28) * 2 * Math.PI, m = (a + b) / 2, rc = hx.Rc;
-        M.quad([c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), z - SL], [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), z - SL],
-          [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), cz1], [c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), cz1], shade(PCOL.col, faceLit(Math.cos(m), Math.sin(m), 0, covered)));
+      // 가운데 기둥
+      const cz1 = top ? z + 1.1 : z + H - SL;
+      for (let j = 0; j < 32; j++) {
+        const a = (j / 32) * 2 * Math.PI, b = ((j + 1) / 32) * 2 * Math.PI, m = (a + b) / 2, rc = hx.Rc;
+        M.quad([c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), z0], [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), z0],
+          [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), cz1], [c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), cz1], shade(PCOL.col, faceLit(Math.cos(m), Math.sin(m), 0, 1)));
         M.quad([c.x, c.y, cz1], [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), cz1], [c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), cz1], [c.x, c.y, cz1], shade(PCOL.col, 1.1));
+      }
+      // 맨 아래층 바닥 (탑 속 지면)
+      if (i === 0) for (let j = 0; j < seg; j++) {
+        const a = (j / seg) * 2 * Math.PI, b = ((j + 1) / seg) * 2 * Math.PI;
+        const P = (r, t) => [c.x + r * Math.cos(t), c.y + r * Math.sin(t), z - 0.32];
+        M.quad(P(hx.Rc, a), P(hx.Rw, a), P(hx.Rw, b), P(hx.Rc, b), PCOL.slabUnder);
       }
     }
   },
