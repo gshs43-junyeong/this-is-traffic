@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat', throat: 0, road: 1, fullGate: 'stop',
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat', throat: 0, road: 1, fullGate: 'stop', ramp: 'straight',
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -16,6 +16,7 @@ const PPRESETS = {
   leave: { W: 64, D: 52, U: 3, B: 2, inRate: 40, outRate: 600, initOcc: 0.95, label: '퇴근 몰림' },
   office: { W: 64, D: 52, U: 3, B: 2, inRate: 300, outRate: 300, initOcc: 0.05, pattern: 'office', label: '업무시설 하루' },
   mech: { kind: 'mech', W: 40, D: 52, U: 12, B: 0, inRate: 120, outRate: 100, initOcc: 0.6, label: '기계식 주차타워' },
+  helix: { ramp: 'helix', W: 72, D: 60, U: 5, B: 1, inRate: 220, outRate: 200, initOcc: 0.55, label: '꼬불이 주차빌딩' },
 };
 
 /** 기계식 승강기 단계 → 고른 차 칸의 상태 글 */
@@ -86,7 +87,7 @@ const PApp = {
     if (this.G.mech && this.heat) this.toggleHeat();
     const S = this.sim.summary();
     this.toast(G.mech ? `기계식 주차타워 ${G.towers.length}기 · 탑마다 ${G.NL}단 · 주차면 ${S.total}면 — 입고실에 세우면 승강기가 칸에 넣습니다`
-      : `${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · 경사로 최대 ${fmt1(G.grade * 100)}%`, 4);
+      : `${G.levels[0].name}~${G.levels[G.NL - 1].name} · 주차면 ${S.total}면 · ${G.hx ? '꼬불이(나선) 경사 ' : '경사로 최대 '}${fmt1(G.grade * 100)}%`, 4);
     this.updMode();
   },
 
@@ -143,7 +144,11 @@ const PApp = {
       let x = s.x - Math.cos(this.fYaw) * back, y = s.y - Math.sin(this.fYaw) * back, z = s.z + up;
       const lv = PScene.lvAt(s.z);
       const inside = s.z > -900 && x > -1 && x < G.W + 1 && y > -1 && y < G.D + 1;
-      if (inside) {
+      if (!ped && s.edge && s.edge.helix && G.hx) {
+        /* 꼬불이 위 — 뒤로 물러나면 원통 벽에 가린다. 나선 안쪽 가장자리(기둥 곁)에서 조금 뒤 · 머리 위 한 층 아래 높이로 */
+        const c = s.edge.kind === 'rampA' ? G.hx.A : G.hx.B, ang = Math.atan2(s.y - c.y, s.x - c.x) + (s.edge.kind === 'rampA' ? -0.5 : 0.5);
+        x = c.x + (G.hx.Rc + 0.45) * Math.cos(ang); y = c.y + (G.hx.Rc + 0.45) * Math.sin(ang); z = s.z + 2.0;
+      } else if (inside) {
         x = clamp(x, 0.6, G.W - 0.6); y = clamp(y, 0.6, G.D - 0.6);
         const ceil = G.levels[lv].z + G.H - PK.slab - 0.35;
         if (lv < G.NL - 1 || G.levels[lv].under) z = Math.min(z, Math.max(s.z + 1.4, ceil));
@@ -376,7 +381,7 @@ const PApp = {
     $('#bApply').onclick = () => { this.readPanel(true); this.panel(false); this.rebuild(); };
     for (const b of $$('[data-preset]')) b.onclick = () => {
       const p = PPRESETS[b.dataset.preset];
-      Object.assign(this.cfg, { kind: 'ramp', pattern: 'flat' }, p); delete this.cfg.label;
+      Object.assign(this.cfg, { kind: 'ramp', pattern: 'flat', ramp: 'straight' }, p); delete this.cfg.label;
       this.fillPanel(); this.readPanel(true); this.panel(false); this.rebuild();
     };
     // 수요 · 운영 값은 다시 짓지 않고 바로 반영
@@ -386,6 +391,7 @@ const PApp = {
     }
     for (const id of ['guide', 'gate', 'pattern']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
     $('#c_kind').addEventListener('change', () => { this.est(); this.dimFields(); });
+    $('#c_ramp').addEventListener('change', () => this.est());
     for (const id of ['#c_gate', '#c_lanes']) $(id).addEventListener('change', () => this.demWarn());
     $('#c_fullGate').addEventListener('change', () => { this.readPanel(false); this.live(); });
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
@@ -414,6 +420,7 @@ const PApp = {
       V.push([base.gate === 'lpr' ? '주차권 · 출구 정산' : '번호판 인식', { gate: base.gate === 'lpr' ? 'ticket' : 'lpr' }]);
       V.push([(base.lanes | 0) >= 2 ? '차단기 1차로' : '차단기 2차로', { lanes: (base.lanes | 0) >= 2 ? 1 : 2 }]);
       V.push([(base.throat | 0) > 0 ? '진입 완충 없음' : '진입 완충 25 m', { throat: (base.throat | 0) > 0 ? 0 : 25 }]);
+      V.push([base.ramp === 'helix' ? '평행 경사로' : '꼬불이 (규모가 작으면 늘려 짓는다)', { ramp: base.ramp === 'helix' ? 'straight' : 'helix' }]);
     }
     const rows = [], DUR = 3600, run = this.pvRun = (this.pvRun || 0) + 1;   // 멈추고 곧바로 다시 눌러도 옛 계산이 끼어들지 않게
     let vi = -1, sim = null, t = 0, qMax = 0;
@@ -525,7 +532,7 @@ const PApp = {
     $('#c_gate').value = c.gate;
     $('#c_pattern').value = c.pattern || 'flat';
     $('#c_lanes').value = String(c.lanes || 1);
-    $('#c_road').value = String(c.road || 1); $('#c_fullGate').value = c.fullGate || 'stop';
+    $('#c_road').value = String(c.road || 1); $('#c_fullGate').value = c.fullGate || 'stop'; $('#c_ramp').value = c.ramp || 'straight';
     $('#c_kind').value = c.kind || 'ramp';
     this.dimFields();
     this.est();
@@ -540,14 +547,14 @@ const PApp = {
     }
     c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value; c.pattern = $('#c_pattern').value;
     c.fullGate = $('#c_fullGate').value;
-    if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; c.road = +$('#c_road').value; }
+    if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; c.road = +$('#c_road').value; c.ramp = $('#c_ramp').value; }
     this.est();
     this.save();
   },
   /** 기계식에서 쓰지 않는 칸은 흐리게 */
   dimFields() {
     const mech = $('#c_kind').value === 'mech';
-    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare', 'c_throat', 'c_fullGate']) {
+    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare', 'c_throat', 'c_fullGate', 'c_ramp']) {
       const f = $('#' + id) && $('#' + id).closest('.fld');
       if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
     }
@@ -597,8 +604,10 @@ const PApp = {
         $('#estOut').textContent = `기계식 주차타워 ${g.towers.length}기 (가로 ${fmt1(g.W)} m) · 탑마다 ${g.NL}단 × 2칸 · 총 ${g.stalls.length}면 · 높이 약 ${fmt1(g.levels[g.NL - 1].z + MK.pitch + 0.7)} m — 세로는 쓰지 않는다`;
         return;
       }
-      const g = buildGarage({ W, D, U, B, seed: 1, throat: +$('#c_throat').value });
-      $('#estOut').textContent = `${g.levels[0].name}~${g.levels[g.NL - 1].name} (${g.NL}개 층) · 주차면 ${g.stalls.length}면 · 층당 약 ${Math.round(g.stalls.length / Math.max(1, g.levels.filter((l) => l.park).length))}면 · 경사로 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %`;
+      const g = buildGarage({ W, D, U, B, seed: 1, throat: +$('#c_throat').value, ramp: $('#c_ramp').value });
+      $('#estOut').textContent = `${g.levels[0].name}~${g.levels[g.NL - 1].name} (${g.NL}개 층) · 주차면 ${g.stalls.length}면 · 층당 약 ${Math.round(g.stalls.length / Math.max(1, g.levels.filter((l) => l.park).length))}면 · ` +
+        (g.hx ? `꼬불이 반경 ${fmt1(g.hx.R)} m · 한 층 한 바퀴 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %` + (g.W > W || g.D > D ? ` — 꼬불이는 가로 ${g.W} · 세로 ${g.D} m 로 늘려 짓는다` : '')
+          : `경사로 ${fmt1(g.Lr)} m, 최대 경사 ${fmt1(g.grade * 100)} %`);
     } catch (e) { $('#estOut').textContent = '배치 불가: ' + e.message; }
   },
 
@@ -727,7 +736,7 @@ const PApp = {
     } else if (this.mode !== 'follow' && this.mode !== 'driver') {
       {
         const L = G.levels[this.cut];
-        const q = Render.point(PK.RW / 2, G.D - 1.2, L.z + 2.0);
+        const q = Render.point((G.RW || PK.RW) / 2, G.D - 1.2, L.z + 2.0);
         if (q) {
           ctx.font = `700 ${Math.round(16 * this.H / 900 + 8)}px system-ui,sans-serif`;
           const w = ctx.measureText(L.name).width + 16;
@@ -743,7 +752,7 @@ const PApp = {
         const parts = [];
         if (i < G.NL - 1) parts.push(['▲ ' + G.levels[i + 1].name, '#9fd8ff']);
         if (i > 0) parts.push(['▼ ' + G.levels[i - 1].name, '#ffd59f']);
-        const q = parts.length && Render.point(PK.RW / 2, G.y_rt - 3, L.z + 1.8);
+        const q = parts.length && (G.hx ? Render.point(G.xa, G.yt - 2, L.z + 1.8) : Render.point(PK.RW / 2, G.y_rt - 3, L.z + 1.8));
         if (q) {
           const ws = parts.map(([t]) => ctx.measureText(t).width), gap = 10;
           const tw = ws.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 12;

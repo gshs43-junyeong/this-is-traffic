@@ -173,10 +173,12 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <button data-preset="leave">퇴근 몰림 (출차 600대/시)</button>
         <button data-preset="office">업무시설 하루 (07시~, 출근 · 퇴근)</button>
         <button data-preset="mech">기계식 주차타워 (4기 × 12단)</button>
+        <button data-preset="helix">꼬불이 주차빌딩 (나선 경사로)</button>
       </div>
       <div class="sect">규모</div>
       <div class="grid">
         <div class="fld"><label>형식</label><select id="c_kind"><option value="ramp">자주식 — 경사로로 직접 운전 (주차빌딩 · 지하주차장)</option><option value="mech">기계식 주차타워 — 승강기가 차를 넣고 꺼낸다</option></select><div class="hint">기계식은 가로 9.4 m 마다 탑 1기, 지상 층수 = 칸 단수(층마다 좌우 2칸), 지하 = 피트 단수. 세로는 쓰지 않는다.</div></div>
+        <div class="fld"><label>층간 이동</label><select id="c_ramp"><option value="straight">평행 경사로 (분리형 직선)</option><option value="helix">꼬불이 (나선형 원통)</option></select><div class="hint">꼬불이는 오르는 원통 · 내리는 원통이 한 층에 한 바퀴씩 돌고, 층마다 착지점에서 드나들어 여러 층을 한 번에 오르내린다. 경사로 칸이 21 m 로 넓어 가로 50 · 세로 58 m 이상.</div></div>
         <div class="fld"><label>가로 (동서) <span class="val" id="v_W"></span></label><input type="range" id="c_W" min="36" max="160" step="2"><div class="hint">서쪽 7.6 m 는 경사로 칸. 통로 하나가 양쪽 주차열과 함께 16 m 를 쓴다.</div></div>
         <div class="fld"><label>세로 (남북) <span class="val" id="v_D"></span></label><input type="range" id="c_D" min="34" max="120" step="2"><div class="hint">45 m 이상이면 남 · 북 가장자리에도 주차열을 둔다. 경사로 길이도 세로를 따른다.</div></div>
         <div class="fld"><label>지상 층수 <span class="val" id="v_U"></span></label><input type="range" id="c_U" min="0" max="15" step="1"><div class="hint">1층이 입구층. 0 이면 지면은 광장이고 주차는 지하에만.</div></div>

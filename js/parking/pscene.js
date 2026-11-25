@@ -154,7 +154,7 @@ const PScene = {
   lvAt(z) { const G = this.G; return clamp(Math.floor((z + 0.4) / G.H + G.B), 0, G.NL - 1); },
 
   buildStatic() {
-    const G = this.G, M = new MeshB(), H = G.H, W = G.W, D = G.D, RW = PK.RW, SL = PK.slab;
+    const G = this.G, M = new MeshB(), H = G.H, W = G.W, D = G.D, RW = G.RW || PK.RW, SL = PK.slab;
     // 묶음: -1(늘 보임) 다음 층 0..NL-1. 층마다 따로 쌓았다가 순서대로 잇는다
     const parts = [];
     for (let g = -1; g < G.NL; g++) parts.push(new MeshB());
@@ -199,7 +199,7 @@ const PScene = {
     // 옥상 조명주 — 지상 맨 위층이 지붕 없는 주차장일 때
     const topL = G.levels[G.NL - 1];
     if (!G.mech && !topL.under && topL.park) {
-      for (let x = PK.RW + 6; x < W - 2; x += 16) for (const y of [0.45, D - 0.45]) {
+      for (let x = RW + 6; x < W - 2; x += 16) for (const y of [0.45, D - 0.45]) {
         part(G.NL - 1).box(x - 0.1, y - 0.1, topL.z, x + 0.1, y + 0.1, topL.z + 6, NX('#6b7076'), false, true);   // 옥상 층과 함께 숨는다
         this.lamps.push([x, y + (y < 1 ? 0.6 : -0.6), topL.z + 5.9, G.NL - 1]);
       }
@@ -248,8 +248,8 @@ const PScene = {
       const aisleC = plaza ? '#7b7a76' : L.under ? PCOL.aisleUnder : covered ? PCOL.aisle : PCOL.aisleRoof;
       const ft = faceLit(0, 0, 1, covered) / faceLit(0, 0, 1, true);
       const top = covered ? shade(slabC, covered === 2 ? 0.82 : 1) : NX(shade(slabC, plaza ? 1 : 1.05));
-      // 슬래브 — 경사로 구멍을 빼고 세 판
-      const rects = [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
+      // 슬래브 — 경사로 구멍을 빼고 세 판 (꼬불이는 원통 구멍을 뺀 경사로 칸 조각들)
+      const rects = G.hx ? [[RW, 0, W, D], ...this.helixSlab()] : [[RW, 0, W, D], [0, 0, RW, G.y_rb], [0, G.y_rt, RW, D]];
       for (const [x0, y0, x1, y1] of rects) {
         M.quad([x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z], top);
         if (i > 0) M.quad([x0, y0, z - SL], [x1, y0, z - SL], [x1, y1, z - SL], [x0, y1, z - SL], PCOL.ceil);
@@ -343,16 +343,17 @@ const PScene = {
           }
           for (let y = 3; y < D - 1; y += 3) M.box(W + 0.02, y - 0.05, z0, W + 0.08, y + 0.05, z0 + h, lc, false, true);
         }
-      } else {
+      } else if (!G.hx) {
         /* 광장 — 경사로 칸은 열어 두고, 아래가 꺼진 가장자리에만 난간을, 경사로 입구에는 높이 제한 문틀을 둔다.
-           ★ 칸 전체를 상자로 덮으면 차가 그 속으로 드나드는 것처럼 보였다 */
+           ★ 칸 전체를 상자로 덮으면 차가 그 속으로 드나드는 것처럼 보였다 (꼬불이는 원통 난간이 이 몫) */
         this.plazaRamp(M, z);
       }
       // 경사로 칸 벽 (주차 구역과 경계) · 두 경사로 분리벽
       if (i < G.NL - 1) {
         M.box(RW - 0.15, G.y_rb, z, RW + 0.15, G.y_rt, z + H - SL, shade(wc, 0.98), covered, true);
-        M.box(3.62, G.y_rb, z - (i > 0 ? 0 : 0), 3.98, G.y_rt, z + H - SL, shade(wc, 0.92), covered, true);
+        if (!G.hx) M.box(3.62, G.y_rb, z - (i > 0 ? 0 : 0), 3.98, G.y_rt, z + H - SL, shade(wc, 0.92), covered, true);
       }
+      if (G.hx) this.helixShell(M, i, z, covered, wc, top);
       // 천장 조명 (이 층 슬래브 아래 = 아래층의 천장) — 아래층이 덮여 있을 때
       if (i > 0) {
         for (const ed of G.edges) {
@@ -372,7 +373,10 @@ const PScene = {
       const covered = true;
       for (let k = 0; k < ed.n - 1; k++) {
         const za = ed.z[k], zb = ed.z[k + 1];
-        if (Math.abs(za - zb) < 1e-4 && (Math.abs(za - z0) < 1e-3 || Math.abs(za - z1) < 1e-3)) continue;
+        if (Math.abs(za - zb) < 1e-4 && (Math.abs(za - z0) < 1e-3 || Math.abs(za - z1) < 1e-3)) {
+          // 평탄부는 슬래브가 덮는다 — 꼬불이 착지 차로가 원통 구멍을 지나는 곳만 그린다
+          if (!(ed.flat && this.inHelixHole((ed.x[k] + ed.x[k + 1]) / 2, (ed.y[k] + ed.y[k + 1]) / 2))) continue;
+        }
         const g = this.lvAt(Math.min(za, zb) + 0.05);
         const M = part(g);
         const ha = ed.h[k], hb = ed.h[k + 1];
@@ -411,6 +415,69 @@ const PScene = {
     all.done();
     this.mesh = all; this.gStart = starts;      // 묶음 g(-1..) 은 [starts[g+1], starts[g+2])
   },
+  /* ---------- 꼬불이(나선형) ---------- */
+  /** 원통 구멍 안인가 (벽 바깥면 + 0.3) */
+  inHelixHole(x, y) {
+    const hx = this.G.hx;
+    for (const c of [hx.A, hx.B]) if (Math.hypot(x - c.x, y - c.y) < hx.Rw + 0.5) return true;
+    return false;
+  },
+  /** 경사로 칸 슬래브 — 1 m 칸을 원통 바깥만 줄마다 이어 붙인다. 원통 둘레 틈은 helixShell 의 테두리 판이 덮는다 */
+  helixSlab() {
+    const G = this.G, hx = G.hx, RW = G.RW, out = [], cut = hx.Rw + 0.2;
+    const clear = (x0, y0, x1, y1) => [hx.A, hx.B].every((c) => Math.hypot(clamp(c.x, x0, x1) - c.x, clamp(c.y, y0, y1) - c.y) > cut);
+    for (let y = 0; y < G.D; y += 1) {
+      const y1 = Math.min(G.D, y + 1);
+      let run = null;
+      for (let x = 0; x < RW - 1e-6; x += 1) {
+        const x1 = Math.min(RW, x + 1);
+        if (clear(x, y, x1, y1)) { if (run) run[2] = x1; else run = [x, y, x1, y1]; }
+        else if (run) { out.push(run); run = null; }
+      }
+      if (run) out.push(run);
+    }
+    return out;
+  },
+  /** 층마다 원통 벽(착지 차로가 지나는 곳은 연다) · 가운데 기둥 · 구멍 테두리 판 */
+  helixShell(M, i, z, covered, wc, top) {
+    const G = this.G, hx = G.hx, SL = PK.slab, NL = G.NL, H = G.H;
+    const roofTop = i === NL - 1 && !G.levels[i].under;
+    const hW = roofTop ? 1.1 : H - SL;             // 맨 위 지상층(옥상 · 광장)은 난간 높이
+    const seg = 56, open = 0.98;                   // 착지 차로가 벽을 지나는 각도 ±56°
+    for (const [c, a0, k] of [[hx.A, Math.PI, 'A'], [hx.B, 0, 'B']]) {
+      // 이 층에 들어오는 길(북쪽) · 나가는 길(남쪽)이 있는가
+      const inN = k === 'A' ? i < NL - 1 : i > 0, outS = k === 'A' ? i > 0 : i < NL - 1;
+      for (let j = 0; j < seg; j++) {
+        const a = (j / seg) * 2 * Math.PI, b = ((j + 1) / seg) * 2 * Math.PI, m = (a + b) / 2;
+        const d = wrapPi(m - a0), north = Math.sin(m) > 0;
+        if (Math.abs(d) < open && ((north && inN) || (!north && outS))) continue;
+        const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b);
+        const r0 = hx.Rw, r1 = hx.Rw + 0.2;
+        const P = (r, cs, sn, zz) => [c.x + r * cs, c.y + r * sn, zz];
+        const fo = shade(wc, faceLit(Math.cos(m), Math.sin(m), 0, covered)), fi = shade(wc, faceLit(-Math.cos(m), -Math.sin(m), 0, covered) * 0.92);
+        M.quad(P(r1, ca, sa, z), P(r1, cb, sb, z), P(r1, cb, sb, z + hW), P(r1, ca, sa, z + hW), fo);
+        M.quad(P(r0, cb, sb, z), P(r0, ca, sa, z), P(r0, ca, sa, z + hW), P(r0, cb, sb, z + hW), fi);
+        M.quad(P(r0, ca, sa, z + hW), P(r1, ca, sa, z + hW), P(r1, cb, sb, z + hW), P(r0, cb, sb, z + hW), shade(wc, 1.05));
+      }
+      // 구멍 테두리 판 — 1 m 칸 슬래브와 원통 벽 사이 틈을 덮는다 (바닥 높이)
+      for (let j = 0; j < seg; j++) {
+        const a = (j / seg) * 2 * Math.PI, b = ((j + 1) / seg) * 2 * Math.PI;
+        const r0 = hx.Rw + 0.2, r1 = hx.Rw + 1.7;
+        // ★ 건물 밖(서쪽 벽 · 경사로 칸 동쪽 벽 너머)으로 나가지 않게 자른다 — 안 자르면 바깥에서 층마다 원판이 비어져 보였다
+        const P = (r, t, zz) => [clamp(c.x + r * Math.cos(t), 0.22, G.RW), clamp(c.y + r * Math.sin(t), 0, G.D), zz];
+        M.quad(P(r0, a, z + 0.004), P(r1, a, z + 0.004), P(r1, b, z + 0.004), P(r0, b, z + 0.004), top);
+        if (i > 0) M.quad(P(r0, b, z - SL), P(r1, b, z - SL), P(r1, a, z - SL), P(r0, a, z - SL), PCOL.ceil);
+      }
+      // 가운데 기둥 (속이 찬 원기둥) — 층마다 한 토막
+      const cz1 = z + (roofTop ? 1.1 : H);
+      for (let j = 0; j < 28; j++) {
+        const a = (j / 28) * 2 * Math.PI, b = ((j + 1) / 28) * 2 * Math.PI, m = (a + b) / 2, rc = hx.Rc;
+        M.quad([c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), z - SL], [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), z - SL],
+          [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), cz1], [c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), cz1], shade(PCOL.col, faceLit(Math.cos(m), Math.sin(m), 0, covered)));
+        M.quad([c.x, c.y, cz1], [c.x + rc * Math.cos(a), c.y + rc * Math.sin(a), cz1], [c.x + rc * Math.cos(b), c.y + rc * Math.sin(b), cz1], [c.x, c.y, cz1], shade(PCOL.col, 1.1));
+      }
+    }
+  },
   /** 광장의 경사로 입구 — 차로마다 끝에서 경사로 면이 광장 높이면 입구(열림), 아니면 난간 */
   plazaRamp(M, z) {
     const G = this.G, RW = PK.RW, y0 = G.y_rb, y1 = G.y_rt, pc = NX('#b8b2a4'), t = 0.2, ph = 1.1;
@@ -442,7 +509,7 @@ const PScene = {
   },
   /** 지하주차장 위 지면 광장 — 길 · 경사로 · 코어를 비켜 화단 나무와 벤치 */
   plazaTrees(M, z) {
-    const G = this.G, W = G.W, D = G.D, RW = PK.RW;
+    const G = this.G, W = G.W, D = G.D, RW = G.RW || PK.RW;
     const near = [];
     for (const ed of G.edges) for (let k = 0; k < ed.n; k += 2) if (Math.abs(ed.z[k] - z) < 2.6) near.push(ed.x[k], ed.y[k]);
     const clear = (x, y, r) => { for (let k = 0; k < near.length; k += 2) if ((near[k] - x) ** 2 + (near[k + 1] - y) ** 2 < r * r) return false; return true; };

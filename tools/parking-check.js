@@ -24,6 +24,8 @@ const confs = {
   '기계식 4기': { kind: 'mech', W: 40, U: 12, B: 1, inRate: 160, outRate: 140 },
   '만차 들여보냄': { fullGate: 'open', inRate: 400, outRate: 100, initOcc: 0.95 },
   '왕복 6차로': { road: 3, thruRate: 900 },
+  '꼬불이': { ramp: 'helix', W: 72, D: 60, U: 5, B: 1 },
+  '꼬불이 지하': { ramp: 'helix', W: 72, D: 60, U: 0, B: 3, outRate: 220 },
   '기계식 6차로': { kind: 'mech', W: 40, U: 12, B: 1, inRate: 160, outRate: 140, road: 3, thruRate: 900 },
 };
 const med = (a) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };

@@ -36,6 +36,16 @@ const PK = {
   colW: 0.6,       // 기둥 폭 — 3 면마다 하나
 };
 
+/** 꼬불이(나선형) 경사로 치수 — 차로 중심 반경 6.7 m 면 안쪽 가장자리 반경이 5 m 를 넘는다(곡선부 내변 반경 5 m 이상).
+    한 층에 한 바퀴(42 m, 경사 7.6 %). 두 원통 사이 · 바깥 직선 차로가 서로 겹치지 않게 접선 차로 간격을 2R + 3.7 로 둔다 */
+const HX = { R: 6.7, tau: 0.08 };
+HX.Rw = HX.R + PK.laneW / 2 + 0.1;        // 원통 벽 안쪽 반경
+HX.Rc = HX.R - PK.laneW / 2 - 0.1;        // 가운데 기둥 반경
+HX.xb = PK.xa + 2 * HX.R + 3.7;           // 내리는 원통의 동쪽 접선 차로
+HX.RW = HX.xb + PK.laneW / 2 + 0.6;       // 경사로 칸 너비
+HX.minW = Math.ceil(HX.RW + 28.4);        // 주차 통로가 둘은 들어가게
+HX.minD = 58;                             // 두 원통이 남북으로 겹치지 않게 (횡단통로 사이 41.3 m)
+
 /* ---------- 폴리라인 ---------- */
 /** 모서리마다 반경 r 의 원호를 넣은 경로를 촘촘히 샘플링한다 */
 function filletPath(corners, r, step) {
@@ -175,17 +185,29 @@ class PEdge {
  */
 function buildGarage(cfg) {
   const G = { cfg, nodes: [], edges: [], stalls: [], levels: [], columns: [], arrows: [] };
-  const H = PK.H, RW = PK.RW, r = PK.r;
+  const H = PK.H, r = PK.r;
   const U = cfg.U | 0, B = cfg.B | 0;
   const NL = Math.max(1, (U > 0 ? U : 1) + B);       // 지상 주차가 없어도 G(지면 광장)는 있다
-  const W = Math.max(36, cfg.W), D = Math.max(34, cfg.D);
+  /* 층간 이동 — 'straight' 평행 직선 경사로(분리형) · 'helix' 꼬불이(나선형) — HX 참고.
+     꼬불이는 원통 둘이 경사로 칸에 들어가야 해서 칸이 넓고(21.3 m) 최소 규모가 크다 */
+  const helix = cfg.ramp === 'helix' && NL > 1;
+  const RW = helix ? HX.RW : PK.RW, xa = PK.xa, xb = helix ? HX.xb : PK.xb;
+  const W = Math.max(helix ? HX.minW : 36, cfg.W), D = Math.max(helix ? HX.minD : 34, cfg.D);
   G.W = W; G.D = D; G.U = U; G.B = B; G.NL = NL; G.H = H;
+  G.RW = RW; G.xa = xa; G.xb = xb; G.rampType = helix ? 'helix' : 'straight';
   const e = D >= 45 ? PK.stallL : 0;                 // 남 · 북 가장자리 주차열
   const yb = e + 3, yt = D - e - 3;
   const y_rt = yt - r, y_rb = yb + r, Lr = y_rt - y_rb;
   const tau = Math.min(0.18, 3 / Lr);
   G.e = e; G.yb = yb; G.yt = yt; G.y_rt = y_rt; G.y_rb = y_rb; G.Lr = Lr;
   G.grade = H / Lr / (1 - tau);                      // 최대 종단경사
+  if (helix) {
+    // 오르는 원통 A 는 북쪽(서쪽 접선 x = xa), 내리는 원통 B 는 남쪽(동쪽 접선 x = xb)
+    const off = 3 + HX.Rw + 0.25;
+    G.hx = { R: HX.R, Rw: HX.Rw, Rc: HX.Rc, A: { x: xa + HX.R, y: yt - off }, B: { x: xb - HX.R, y: yb + off } };
+    G.Lr = 2 * Math.PI * HX.R;
+    G.grade = H / G.Lr / (1 - HX.tau);
+  }
   G.gIdx = B;                                        // 지면층 번호
   for (let i = 0; i < NL; i++) {
     const rel = i - B;
@@ -226,14 +248,14 @@ function buildGarage(cfg) {
     /* 아래 횡단통로의 합류점 — 아래층에서 올라온 A (i>0), 위층에서 내려온 B (i<NL-1).
        층이 하나뿐이면 경사로 칸의 평탄 회차로가 A 자리를 쓴다 */
     const merges = [];
-    if (i > 0 || NL === 1) merges.push({ x: PK.xa + r, k: 'A' });
-    if (i < NL - 1) merges.push({ x: PK.xb + r, k: 'B' });
+    if (i > 0 || NL === 1) merges.push({ x: xa + r, k: 'A' });
+    if (i < NL - 1) merges.push({ x: xb + r, k: 'B' });
     if (L.park) for (let j = 1; j < n - 1; j++) merges.push({ x: xi[j] + r, k: 'a' + j });
     merges.sort((p, q) => p.x - q.x);
     const diverges = [];   // 위 횡단통로 (서쪽으로 가며 만나는 순)
     if (L.park) for (let j = n - 2; j >= 1; j--) diverges.push({ x: xi[j] + r, k: 'a' + j });
-    if (hasB(i)) diverges.push({ x: PK.xb + r, k: 'B' });
-    if (hasA(i) || NL === 1) diverges.push({ x: PK.xa + r, k: 'A' });
+    if (hasB(i)) diverges.push({ x: xb + r, k: 'B' });
+    if (hasA(i) || NL === 1) diverges.push({ x: xa + r, k: 'A' });
     const xs = merges[0].x, xend = diverges[diverges.length - 1].x;
     const path = filletPath([[xs, yb], [xf, yb], [xf, yt], [xend, yt]], r);
     const Ltot = polyLen(path.X, path.Y);
@@ -285,7 +307,8 @@ function buildGarage(cfg) {
   }
   // 경사로
   G.ramps = [];
-  for (let i = 0; i < NL; i++) {
+  if (helix) buildHelix(G, lvN, node, link, addEdge);
+  else for (let i = 0; i < NL; i++) {
     const z0 = zLv(i);
     if (hasA(i)) {
       const p = filletPath([[PK.xa + r, yt], [PK.xa, yt], [PK.xa, yb], [PK.xa + r, yb]], r);
@@ -380,6 +403,52 @@ function buildGarage(cfg) {
 }
 
 /** 주차면 · 기둥 */
+/** 꼬불이 — 층마다 착지점(접선 위 한 점)에서 나선과 층이 만난다. 오르는 나선은 착지점에서 한 바퀴 돌아 바로 위층
+    착지점으로, 그 층 위 횡단통로에서 들어오는 길과 아래 횡단통로로 나가는 길이 착지점에 붙는다. 그래서 여러 층을
+    한 번에 오르내릴 수 있다(실제 꼬불이 동선). ★ 층에서 들어온 길(ap.thru)은 반드시 나선으로 — 착지점에서 바로 같은 층으로
+    나가면 경사로 칸을 가로지르는 지름길이 되어, 찾는 차가 몰려 나선 차와 엉켰다(30 분 입차 52 대 · 교착 풀기 15).
+    길 찾기(다익스트라 셋)는 ap 와 ap.thru 를 한 걸음으로 친다 (thruHop). 착지점에서는 모든 길이 남쪽을 향한다 —
+    A 는 시계 반대 방향(서쪽 점에서 남쪽으로), B 는 시계 방향(동쪽 점에서 남쪽으로) */
+function buildHelix(G, lvN, node, link, addEdge) {
+  const { NL, H, yb, yt, xa, xb } = G, r = PK.r, hx = G.hx, R = hx.R;
+  const LA = [], LB = [];
+  for (let i = 0; i < NL; i++) {
+    const z = G.levels[i].z;
+    LA.push(node(xa, hx.A.y, z, i)); LB.push(node(xb, hx.B.y, z, i));
+  }
+  const arc = (c, a0, sweep) => {
+    const X = [], Y = [], k = Math.ceil(Math.abs(sweep) * R / 0.25);
+    for (let j = 0; j <= k; j++) { const a = a0 + sweep * j / k; X.push(c.x + R * Math.cos(a)); Y.push(c.y + R * Math.sin(a)); }
+    return { X, Y };
+  };
+  const flat = (kind, i, P, a, b) => {
+    const z = G.levels[i].z;
+    const ed = addEdge(kind, i, P.X, P.Y, 0, null, () => z, 3.0);
+    link(ed, a, b); ed.flat = true; ed.up = kind === 'rampA'; G.ramps.push(ed); return ed;
+  };
+  for (let i = 0; i < NL; i++) {
+    const z0 = G.levels[i].z;
+    // 오르는 쪽 A
+    if (i < NL - 1) {
+      const ap = flat('rampA', i, filletPath([[xa + r, yt], [xa, yt], [xa, hx.A.y]], r), lvN[i].dA, LA[i]);
+      const P = arc(hx.A, Math.PI, 2 * Math.PI);
+      const ed = addEdge('rampA', i, P.X, P.Y, 0, null, (x, y, u) => z0 + H * rampProfile(u, HX.tau), 3.0);
+      link(ed, LA[i], LA[i + 1]); ed.up = true; ed.helix = true; G.ramps.push(ed);
+      ap.thru = ed;
+    }
+    if (i > 0) flat('rampA', i, filletPath([[xa, hx.A.y], [xa, yb], [xa + r, yb]], r), LA[i], lvN[i].mA);
+    // 내려가는 쪽 B
+    if (i > 0) {
+      const ap = flat('rampB', i, filletPath([[xb + r, yt], [xb, yt], [xb, hx.B.y]], r), lvN[i].dB, LB[i]);
+      const P = arc(hx.B, 0, -2 * Math.PI);
+      const ed = addEdge('rampB', i, P.X, P.Y, 0, null, (x, y, u) => z0 - H * rampProfile(u, HX.tau), 3.0);
+      link(ed, LB[i], LB[i - 1]); ed.up = false; ed.helix = true; G.ramps.push(ed);
+      ap.thru = ed;
+    }
+    if (i < NL - 1) flat('rampB', i, filletPath([[xb, hx.B.y], [xb, yb], [xb + r, yb]], r), LB[i], lvN[i].mB);
+  }
+}
+
 /** 바깥 도로 — 방향마다 cfg.road(1~3) 차로. 서행 차로(주차장 쪽 첫 차로)는 이미 있고 나머지는 통과 차만 다닌다.
     차로 하나가 3.3 m — 서쪽으로 가는 차로가 주차장 쪽, 그 너머 중앙선, 동쪽으로 가는 차로 */
 function roadLanes(G, cfg, ys, xL, xR, curbEnd, mk) {
@@ -459,7 +528,7 @@ function placeStalls(G) {
     // 남 · 북 가장자리 열
     if (e > 0) {
       const loop = G.loops[i];
-      const rx = run(PK.RW + 0.3, xf + 3);
+      const rx = run(G.RW + 0.3, xf + 3);
       for (const cx of rx.cs) {
         if (cx > xf - r - 1.3) continue;
         if (cx >= loop.xs + 1.6) {
@@ -505,16 +574,17 @@ function routeTo(G, fromNode, goalEdge, forbidExit) {
     for (const ed of u.outs) {
       if (ed === goalEdge) {
         const path = [ed]; let k = u;
-        while (prev[k.id]) { path.push(prev[k.id]); k = prev[k.id].from; }
+        while (prev[k.id]) { const p = prev[k.id]; if (Array.isArray(p)) { path.push(p[1], p[0]); k = p[0].from; } else { path.push(p); k = p.from; } }
         return path.reverse();
       }
       if (forbidExit && (ed.kind === 'exit')) continue;
       if (ed.kind === 'street') continue;
       /* 줄이 보이는 통로는 피한다 — 간선 위 차 한 대마다 8 m 를 더한다. 오르는 차와 내려가는 차가
          같은 지름길에 몰려 서로의 경사로 입구를 막는 고리 교착을 줄인다 */
-      const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.north ? ed.cars.length * 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0);
-      const v = ed.to;
-      if (dist[u.id] + w < dist[v.id]) { dist[v.id] = dist[u.id] + w; prev[v.id] = ed; open.push(v); }
+      const wt = (e) => e.len + (e.kind === 'rampA' || e.kind === 'rampB' ? 8 : 0) + (e.north ? e.cars.length * 8 : 0) + (e.cars.some((c) => c.broken) ? 120 : 0);
+      const w = wt(ed) + (ed.thru ? wt(ed.thru) : 0);
+      const v = ed.thru ? ed.thru.to : ed.to;
+      if (dist[u.id] + w < dist[v.id]) { dist[v.id] = dist[u.id] + w; prev[v.id] = ed.thru ? [ed, ed.thru] : ed; open.push(v); }
     }
   }
   return null;

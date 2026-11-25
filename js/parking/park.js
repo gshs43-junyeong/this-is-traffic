@@ -249,6 +249,8 @@ class ParkSim {
   }
   choose(v, nd) {
     const outs = nd.outs;
+    const last = v.route[v.route.length - 1];
+    if (last && last.thru && last.to === nd) { if (v.path && v.path[0] === last.thru) v.path.shift(); return last.thru; }   // 꼬불이 착지점 — 들어온 길은 나선으로만
     if (outs.length === 1) return outs[0];
     // 차단기 차로가 둘이면 줄이 짧은 쪽으로
     if (outs.every((e) => e.gate)) {
@@ -329,8 +331,9 @@ class ParkSim {
           c += jam * 10;
           if (c < bc) { bc = c; best = f; }
         }
-        const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0) + jam * 10;
-        const to = ed.to;
+        let w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.cars.some((c) => c.broken) ? 120 : 0) + jam * 10;
+        if (ed.thru) w += ed.thru.len + 8;                 // 꼬불이 — 층에서 든 길은 나선까지 한 걸음
+        const to = ed.thru ? ed.thru.to : ed.to;
         if (dist[u.id] + w < dist[to.id]) { dist[to.id] = dist[u.id] + w; first[to.id] = f; open.push(to); }
       }
     }
@@ -639,8 +642,9 @@ class ParkSim {
         if (done[u.id]) continue; done[u.id] = 1;
         for (const ed of u.outs) {
           if (ed.kind === 'exit' || ed.kind === 'street') continue;
-          const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0);
-          if (dist[u.id] + w < dist[ed.to.id]) { dist[ed.to.id] = dist[u.id] + w; open.push(ed.to); }
+          const w = ed.len + (ed.kind === 'rampA' || ed.kind === 'rampB' ? 8 : 0) + (ed.thru ? ed.thru.len + 8 : 0);
+          const to = ed.thru ? ed.thru.to : ed.to;
+          if (dist[u.id] + w < dist[to.id]) { dist[to.id] = dist[u.id] + w; open.push(to); }
         }
       }
       for (const ed of G.parkEdges) G._dEnt.set(ed.id, dist[ed.from.id]);
