@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>도시 교통 시뮬레이터 — 신호 교차로 · 격자 도로망</title>
+<style>
+:root{
+  --bg:#0b0d12; --panel:#141821; --panel2:#1b2029; --line:#2a3140;
+  --ink:#e6e9ef; --dim:#8d96a8; --acc:#5fc48f; --warn:#e0a63a; --bad:#e2574c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;overflow:hidden}
+body{font-family:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",-apple-system,system-ui,sans-serif;
+  color:var(--ink);user-select:none;-webkit-font-smoothing:antialiased}
+#app{position:fixed;inset:0}
+#view,#sky,#gl{position:absolute;inset:0;width:100%;height:100%;display:block}
+#view{background:#0b0d12;touch-action:none}
+body.gl #view{background:transparent}
+#sky,#gl{display:none}
+body.gl #sky,body.gl #gl{display:block}
+#hud{position:absolute;inset:0;pointer-events:none;font-size:13px}
+.card{background:#10141bd9;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 24px #0008;backdrop-filter:blur(6px)}
+.card h3{font-size:11px;color:var(--dim);font-weight:600;letter-spacing:.06em;margin-bottom:7px}
+.row{display:flex;justify-content:space-between;align-items:baseline;padding:2.5px 0;font-size:12.5px;gap:10px}
+.row .k{color:var(--dim)}
+.row .v{font-variant-numeric:tabular-nums;font-weight:600;text-align:right}
+#statBox{position:absolute;left:16px;top:14px;width:248px;padding:11px 13px}
+#statBox .big{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+#sCars{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+#sV{color:var(--dim);font-size:12px}
+#losBar{display:flex;height:16px;border-radius:4px;overflow:hidden;margin:8px 0 3px}
+#losBar i{display:block;height:100%;font-style:normal;font-size:10px;font-weight:700;color:#0b0d12c0;text-align:center;line-height:16px}
+#losLeg{font-size:10.5px;color:var(--dim)}
+#chart{width:100%;height:58px;display:block;margin-top:8px;border-radius:4px}
+.leg{display:flex;gap:10px;font-size:10.5px;color:var(--dim);margin-top:4px}
+.leg i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+#selBox{position:absolute;right:16px;top:14px;width:262px;padding:11px 13px;display:none}
+#selBox .hint{font-size:11px;color:#69728a;margin-top:6px}
+#selBox .ph{display:flex;gap:4px;margin:6px 0 4px}
+#selBox .ph span{flex:1;font-size:10.5px;text-align:center;padding:3px 0;border-radius:4px;background:#1b2029;color:var(--dim);border:1px solid var(--line)}
+#selBox .ph span.on{background:#1e4d38;color:#bff0d6;border-color:var(--acc)}
+#bar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;
+  pointer-events:auto;padding:7px;max-width:min(1200px,calc(100% - 24px))}
+#bar .grp{display:flex;gap:3px;align-items:center;padding:0 3px;border-right:1px solid var(--line)}
+#bar .grp:last-child{border-right:0}
+#bar button{padding:6px 8px;font-size:12px}
+button{font:inherit;font-size:12.5px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;padding:7px 11px;cursor:pointer;transition:.12s;white-space:nowrap}
+button:hover{background:#252c38;border-color:#3d4757}
+button.on{background:#1e4d38;border-color:var(--acc);color:#bff0d6}
+button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-weight:600}
+#clock{font-variant-numeric:tabular-nums;color:var(--dim);font-size:12px;padding:0 6px}
+#perf{position:absolute;left:16px;bottom:16px;font-size:10.5px;color:#5d6678}
+#keys{position:absolute;left:16px;bottom:34px;font-size:11px;color:#6a7386;line-height:1.6}
+#keys b{color:#98a2b5;font-weight:600}
+@media(max-width:1500px){#keys{bottom:96px}}
+#toast{position:absolute;left:50%;top:70px;transform:translate(-50%,-12px);background:#0f141cf0;border:1px solid var(--line);
+  border-radius:8px;padding:9px 17px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#noGL{display:none;position:absolute;left:50%;top:40%;transform:translateX(-50%);padding:14px 18px}
+#links{position:absolute;left:50%;top:10px;transform:translateX(-50%);display:flex;gap:6px;pointer-events:auto}
+#links a{font-size:11.5px;color:#8d96a8;text-decoration:none;background:#10141bb0;border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+#panel{position:absolute;inset:0;background:#070910e8;display:none;overflow:auto;pointer-events:auto;backdrop-filter:blur(3px)}
+#panel.on{display:block}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 20px 60px}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+.phead h1{font-size:19px;font-weight:700}
+.phead p{font-size:12px;color:var(--dim);margin-top:3px}
+.sect{font-size:12px;color:var(--dim);letter-spacing:.06em;margin:20px 0 10px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.fld{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px}
+.fld label{display:block;font-size:12px;color:var(--dim);margin-bottom:7px}
+.fld .val{float:right;color:var(--acc);font-variant-numeric:tabular-nums;font-weight:600}
+.fld input[type=range]{width:100%;accent-color:var(--acc)}
+.fld select{width:100%;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font:inherit;font-size:13px}
+.fld .hint{font-size:11px;color:#69728a;margin-top:6px;line-height:1.5}
+.chk{display:flex;align-items:center;gap:9px}
+.chk input{width:16px;height:16px;accent-color:var(--acc)}
+.chk label{margin:0}
+.presets{display:flex;flex-wrap:wrap;gap:8px}
+#estOut{font-size:12.5px;color:#b9e8cf;background:#12201a;border:1px solid #24402f;border-radius:8px;padding:10px 12px;margin-top:12px}
+#demWarn{font-size:12.5px;color:#ffd9a8;background:#241a10;border:1px solid #4a3418;border-radius:8px;padding:10px 12px;margin-top:12px;display:none}
+#demWarn.on{display:block}
+#anaOut table{width:100%;border-collapse:collapse;font-size:12px}
+#anaOut td,#anaOut th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums}
+#anaOut th{color:var(--dim);font-weight:600}
+#anaOut td:first-child,#anaOut th:first-child{text-align:left}
+.doc{font-size:12.5px;line-height:1.75;color:#b9c1d0}
+.doc h4{font-size:13.5px;color:var(--ink);margin:14px 0 5px}
+.doc ul{margin:5px 0 5px 18px}
+@media(max-width:760px){
+  #keys,#perf,#clock,[data-speed="10"],[data-speed="20"],[data-mode="driver"],#links{display:none}
+  #statBox{left:8px;top:8px;width:168px;padding:8px 9px}
+  #statBox .opt{display:none}
+  #sCars{font-size:16px}
+  #chart,.leg{display:none}
+  #bar{bottom:8px;gap:3px;padding:5px}
+  #bar .grp{padding:0 2px;gap:3px}
+  #bar button{font-size:11.5px;padding:5px 7px}
+  #selBox{top:auto;bottom:118px;right:8px;width:210px}
+  #toast{top:auto;bottom:178px;font-size:12px;white-space:normal;width:max-content;max-width:calc(100% - 32px);text-align:center}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="sky"></canvas>
+  <canvas id="gl"></canvas>
+  <canvas id="view"></canvas>
+  <div id="hud">
+    <div id="statBox" class="card">
+      <h3>도시 소통</h3>
+      <div class="big"><span id="sCars">0 대</span><span id="sV">평균 0 km/h</span></div>
+      <div class="row"><span class="k">멈춰 선 차</span><span class="v" id="sQ">0</span></div>
+      <div class="row"><span class="k">도착 (최근 10 분 → 시간당)</span><span class="v" id="sPerH">0</span></div>
+      <div class="row opt" title="출발(대기 포함) ~ 도착"><span class="k">평균 통행 시간</span><span class="v" id="sTT">—</span></div>
+      <div class="row" title="제한속도로 막힘 없이 달렸을 때보다 더 걸린 시간"><span class="k">평균 지체</span><span class="v" id="sDelay">—</span></div>
+      <div class="row opt"><span class="k">통행당 정지 횟수</span><span class="v" id="sStops">—</span></div>
+      <div class="row opt" title="도로가 막혀 아직 도로에 오르지 못한 출발"><span class="k">출발 대기</span><span class="v" id="sWait">0</span></div>
+      <div class="row opt" title="교차로가 서로 막혀 4 분 넘게 못 움직인 차를 도로망에서 뺀 수 · 놓친 회전을 다른 길로 바꾼 수"><span class="k">교착 해소 · 우회</span><span class="v" id="sJam">0 · 0</span></div>
+      <div id="losBar"></div>
+      <div id="losLeg">교차로 서비스 수준 (A 원활 ~ F 포화)</div>
+      <canvas id="chart" width="480" height="116"></canvas>
+      <div class="leg"><span><i style="background:#5fc48f"></i>평균 속도</span><span><i style="background:#e0a63a"></i>도로 위 차</span><span><i style="background:#e2574c"></i>멈춘 차</span></div>
+    </div>
+    <div id="selBox" class="card"></div>
+    <div id="bar" class="card">
+      <div class="grp"><button id="bPause">⏸ 일시정지</button><span id="clock">0:00</span></div>
+      <div class="grp"><button data-speed="1">×1</button><button data-speed="2">×2</button><button data-speed="5">×5</button><button data-speed="10">×10</button><button data-speed="20">×20</button></div>
+      <div class="grp"><button id="bFlow" title="소통 지도 (H)">소통 지도</button><button id="bNight" title="주간 · 야간 (N)">주간</button><button id="bSig" title="신호 방식 바꾸기 (G)">직진 후 좌회전</button><button id="bCoord" title="녹색 물결 연동 (C)">연동 끔</button></div>
+      <div class="grp"><button data-mode="orbit">자유 시점</button><button data-mode="top" title="T">위에서</button><button data-mode="follow" title="F">차 따라가기</button><button data-mode="driver" title="V">운전석</button></div>
+      <div class="grp"><button id="bSet" class="primary">설정</button></div>
+    </div>
+    <div id="keys">
+      <b>끌기</b> 회전 · <b>우클릭/Shift 끌기</b> 이동 · <b>휠</b> 확대 · <b>클릭</b> 차 · 교차로 선택<br>
+      <b>T</b> 위에서 · <b>F</b> 차 따라가기 · <b>V</b> 운전석 · <b>H</b> 소통 지도 · <b>G</b> 신호 방식 · <b>C</b> 연동<br>
+      <b>Space</b> 일시정지 · <b>1~5</b> 배속 · <b>N</b> 야간 · <b>P</b> 설정
+    </div>
+    <div id="perf"></div>
+    <div id="links"><a href="index.html">고속도로 시뮬레이터</a><a href="parking.html">주차장 시뮬레이터</a></div>
+    <div id="toast"></div>
+    <div id="noGL" class="card">이 브라우저에서 WebGL 을 쓸 수 없어 도시를 그리지 못합니다. 크롬 · 엣지 · 사파리 최신판에서 열어 주세요.</div>
+  </div>
+
+  <div id="panel">
+    <div class="wrap">
+      <div class="phead">
+        <div><h1>도시 설정</h1><p>도로망을 바꾸면 도시를 새로 짓습니다. 수요 · 신호 값도 새로 짓기로 반영됩니다.</p></div>
+        <div style="display:flex;gap:8px"><button id="bClose">닫기 (Esc)</button><button id="bApply" class="primary">이 설정으로 새로 짓기</button></div>
+      </div>
+      <div class="sect">빠른 설정</div>
+      <div class="presets">
+        <button data-preset="base">기본 도심 (4×4 · 왕복 4차로)</button>
+        <button data-preset="wave">녹색 물결 (신호 연동)</button>
+        <button data-preset="rush">출퇴근 혼잡 (시간당 4,000대)</button>
+        <button data-preset="big">넓은 도시 (7×7)</button>
+        <button data-preset="narrow">좁은 길 (왕복 2차로)</button>
+        <button data-preset="avenue">대로 (왕복 6차로 · 긴 블록)</button>
+      </div>
+      <div class="sect">도로망</div>
+      <div class="grid">
+        <div class="fld"><label>교차로 — 동서 <span class="val" id="v_NX"></span></label><input type="range" id="c_NX" min="2" max="8" step="1"><div class="hint">바깥 교차로에서 도로가 도시 밖으로 170 m 이어지고, 그 끝이 드나드는 곳이다.</div></div>
+        <div class="fld"><label>교차로 — 남북 <span class="val" id="v_NY"></span></label><input type="range" id="c_NY" min="2" max="8" step="1"></div>
+        <div class="fld"><label>블록 길이 <span class="val" id="v_B"></span></label><input type="range" id="c_B" min="80" max="260" step="10"><div class="hint">교차로 중심 사이 거리. 짧으면 앞 교차로 대기열이 뒤 교차로를 막기 쉽다(넘침).</div></div>
+        <div class="fld"><label>차로 (방향마다)</label><select id="c_lanes"><option value="1">1 차로 — 왕복 2차로</option><option value="2">2 차로 — 왕복 4차로</option><option value="3">3 차로 — 왕복 6차로</option></select><div class="hint">좌회전은 1차로에서, 우회전은 끝 차로에서만. 직진은 모든 차로.</div></div>
+        <div class="fld"><label>시드 <span class="val" id="v_seed"></span></label><input type="range" id="c_seed" min="1" max="99" step="1"><div class="hint">차 · 출발지 · 건물 배치가 바뀐다.</div></div>
+      </div>
+      <div id="estOut"></div>
+      <div class="sect">신호</div>
+      <div class="grid">
+        <div class="fld"><label>신호 방식</label><select id="c_phase"><option value="lead">직진 후 좌회전 — 남북 직진 → 남북 좌회전 → 동서 직진 → 동서 좌회전</option><option value="approach">방향별 동시 — 북 → 동 → 남 → 서 (진입로마다 직진 · 좌 · 우 함께)</option></select><div class="hint">어느 쪽이든 황색 3 초 · 전적색 2 초, 적신호에는 멈춘 뒤 우회전할 수 있다.</div></div>
+        <div class="fld"><label>신호 주기 <span class="val" id="v_cycle"></span></label><input type="range" id="c_cycle" min="60" max="180" step="10"><div class="hint">녹색 시간은 직진 33 % · 좌회전 17 % 씩 (방향별 동시는 25 % 씩). 주기가 길수록 잃는 시간 비율은 줄지만 기다림이 길어진다.</div></div>
+        <div class="fld"><div class="chk"><input type="checkbox" id="c_coord"><label for="c_coord">녹색 물결 (동서 연동)</label></div><div class="hint">동서 직진 녹색이 동쪽 교차로로 갈수록 45 km/h 로 달린 시간만큼 늦게 켜진다 — 동쪽으로 가는 차는 잇달아 녹색을 만난다. 끄면 교차로마다 시작이 제각각.</div></div>
+      </div>
+      <div class="sect">수요</div>
+      <div class="grid">
+        <div class="fld"><label>통행 수요 <span class="val" id="v_demand"></span></label><input type="range" id="c_demand" min="200" max="6000" step="100"><div class="hint">도시 전체에서 한 시간에 출발하는 차 (포아송 도착).</div></div>
+        <div class="fld"><label>도심 안 출발 · 도착 비율 <span class="val" id="v_inner"></span></label><input type="range" id="c_inner" min="0" max="1" step="0.05"><div class="hint">나머지는 도시 밖에서 들어오고 도시 밖으로 나간다(통과 · 출퇴근). 도심 안이면 블록 가운데 건물 출입구에서 길가 차로로 드나든다.</div></div>
+      </div>
+      <div id="demWarn"></div>
+      <div class="sect">지금 교차로 (지난 10 초 마다 고친 값)</div>
+      <div id="anaOut"></div>
+      <div class="sect">모형</div>
+      <div class="doc">
+        <h4>차</h4>
+        <ul><li>지능형 운전자 모형(IDM) — 고속도로 시뮬레이터와 같은 식. 제한속도 50 km/h, 차마다 원하는 속도 ±12 %, 차간 시간 1.0~1.5 초.</li>
+        <li>다음 교차로에서 돌 방향에 맞는 차로로 미리 옮긴다. 옆 차로 뒷차는 끼어들려는 차에게 틈을 내준다. 직진 차는 앞이 막힌 차로를 피해 옆 차로로 가기도 한다.</li>
+        <li>회전은 교차로 안 곡선을 따라 좌회전 25 km/h · 우회전 17 km/h 이하.</li></ul>
+        <h4>경로</h4>
+        <ul><li>출발할 때 구간마다 최근 통행 시간으로 가장 빠른 길(다익스트라, 좌회전 14 초 · 우회전 5 초 벌점)을 고르고, 교차로를 지날 때 35 % 확률로 다시 고른다 — 막힌 길을 돌아간다.</li></ul>
+        <h4>교차로</h4>
+        <ul><li>녹색이어도 건너편 차로에 내 차가 들어갈 자리가 없으면 정지선에서 기다린다(꼬리 물기 금지).</li>
+        <li>서비스 수준은 진입로 제어 지체(제한속도에 못 미친 만큼의 시간)를 HCM 신호교차로 기준 A ≤10 · B ≤20 · C ≤35 · D ≤55 · E ≤80 초 · F 로 나눈다.</li>
+        <li>서로 막혀 4 분 넘게 꼼짝 못 하는 정지선 맨 앞 차는 도로망에서 뺀다(교착 해소 — 세어 보여 준다).</li></ul>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="js/util.js"></script>
+<script src="js/traffic.js"></script>
+<script src="js/render.js"></script>
+<script src="js/parking/pscene.js"></script>
+<script src="js/city/csim.js"></script>
+<script src="js/city/cscene.js"></script>
+<script src="js/city/cmain.js"></script>
+</body>
+</html>
