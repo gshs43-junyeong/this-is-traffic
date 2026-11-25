@@ -73,11 +73,12 @@ function buildMech(cfg) {
     G.towers.push(T);
   }
   G.towers.sort((a, b) => a.idx - b.idx);
-  // 반대 차로
-  const eb = edge('street', filletPath([[xL, ys - 3.3], [xR, ys - 3.3]], r, 1), 12.5);
-  const nE0 = node(xL, ys - 3.3), nE1 = node(xR, ys - 3.3); link(eb, nE0, nE1);
-  G.streetEB = eb;
-  G.sinks = new Set([nS1.id, nE1.id]);
+  // 통과 차로 (같은 방향 안쪽 · 반대 방향) — garage.js roadLanes
+  roadLanes(G, cfg, ys, xL, xR, nS1, (xa, ya, xb, yb, vmax) => {
+    const e = edge('street', filletPath([[xa, ya], [xb, yb]], r, 1), vmax);
+    const n1 = node(xb, yb); link(e, node(xa, ya), n1);
+    return { e, end: n1 };
+  });
   // 칸
   let sid = 0;
   for (const T of G.towers) for (const L of G.levels) for (const sd of [-1, 1]) {

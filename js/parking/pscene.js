@@ -167,13 +167,17 @@ const PScene = {
     A.quad([-big, -big, gz], [W + big, -big, gz], [W + big, 0, gz], [-big, 0, gz], NX(PCOL.ground));
     A.quad([-big, 0, gz], [0, 0, gz], [0, D, gz], [-big, D, gz], NX(PCOL.ground));
     A.quad([W, 0, gz], [W + big, 0, gz], [W + big, D, gz], [W, D, gz], NX(PCOL.ground));
-    const ys = PK.ys;
-    A.quad([-big, ys - 5.0, 0.0], [W + big, ys - 5.0, 0.0], [W + big, ys + 1.75, 0.0], [-big, ys + 1.75, 0.0], NX(PCOL.asphalt));
+    const ys = PK.ys, yF = G.yFar, yC = G.yCenter, nR = G.road || 1;
+    A.quad([-big, yF, 0.0], [W + big, yF, 0.0], [W + big, ys + 1.75, 0.0], [-big, ys + 1.75, 0.0], NX(PCOL.asphalt));
     A.quad([-big, ys + 1.75, 0.01], [W + big, ys + 1.75, 0.01], [W + big, -0.3, 0.01], [-big, -0.3, 0.01], NX(PCOL.pave));
-    A.quad([-big, ys - 9.0, 0.01], [W + big, ys - 9.0, 0.01], [W + big, ys - 5.0, 0.01], [-big, ys - 5.0, 0.01], NX(PCOL.pave));
-    for (let x = -big; x < W + big; x += 6) {    // 중앙선 (황색 실선 둘) · 차로 끝 백색
-      A.quad([x, ys - 1.76, 0.02], [x + 6, ys - 1.76, 0.02], [x + 6, ys - 1.62, 0.02], [x, ys - 1.62, 0.02], NX(PCOL.lineY));
-      A.quad([x, ys - 1.98, 0.02], [x + 6, ys - 1.98, 0.02], [x + 6, ys - 1.84, 0.02], [x, ys - 1.84, 0.02], NX(PCOL.lineY));
+    A.quad([-big, yF - 4.0, 0.01], [W + big, yF - 4.0, 0.01], [W + big, yF, 0.01], [-big, yF, 0.01], NX(PCOL.pave));
+    for (let x = -big; x < W + big; x += 6) {    // 중앙선 (황색 실선 둘)
+      A.quad([x, yC + 0.04, 0.02], [x + 6, yC + 0.04, 0.02], [x + 6, yC + 0.18, 0.02], [x, yC + 0.18, 0.02], NX(PCOL.lineY));
+      A.quad([x, yC - 0.18, 0.02], [x + 6, yC - 0.18, 0.02], [x + 6, yC - 0.04, 0.02], [x, yC - 0.04, 0.02], NX(PCOL.lineY));
+    }
+    // 같은 방향 차로 사이 백색 점선 (왕복 4 · 6 차로)
+    for (let k = 1; k < nR; k++) for (const yl of [ys - 3.3 * k + 1.65, ys - 3.3 * (nR + k) + 1.65]) {
+      for (let x = -big; x < W + big; x += 8) A.quad([x, yl - 0.07, 0.02], [x + 3, yl - 0.07, 0.02], [x + 3, yl + 0.07, 0.02], [x, yl + 0.07, 0.02], NX('#e8e8e2'));
     }
     // 진입로 · 진출로 포장 + 차단기 기둥
     for (const ed of G.edges) if (ed.kind === 'entry' || ed.kind === 'exit') this.ribbon(A, ed, 0, ed.len, 1.75, 0.03, NX(PCOL.asphalt), false, () => 0.03);
@@ -220,7 +224,7 @@ const PScene = {
     const rng = new RNG('bld:' + (G.cfg.seed | 0));
     for (let x = -120; x < W + 120; x += rng.range(22, 34)) {
       const w = rng.range(14, 24), d = rng.range(14, 22), h = rng.range(9, 38);
-      const y0 = ys - 13 - d;
+      const y0 = yF - 8 - d;
       A.box(x, y0, 0, x + w, y0 + d, h, rng.pick(['#b9b4a8', '#a7aab0', '#c4b9a6', '#9aa3a8']), false, true);
       // 길 쪽 면의 창 — 밤에는 군데군데 불이 켜진다
       for (let fz = 1.2; fz < h - 1.5; fz += 3.2) for (let fx = x + 1.2; fx < x + w - 1.6; fx += 2.6) {
@@ -319,10 +323,30 @@ const PScene = {
           M.box(-0.05, -0.05, z + H - SL - 0.55, W + 0.05, 0.12, z + H - SL, shade(PCOL.wall, 0.96), covered, false);
           M.box(-0.05, D - 0.12, z + H - SL - 0.55, W + 0.05, D + 0.05, z + H - SL, shade(PCOL.wall, 0.96), covered, false);
           M.box(W - 0.12, 0, z + H - SL - 0.55, W + 0.05, D, z + H - SL, shade(PCOL.wall, 0.96), covered, false);
+          /* 난간벽과 띠벽 사이(1.25 m)를 금속 루버 판으로 메운다 — 비워 두면 옆에서 볼 때 바닥판만 떠 있는 것처럼 보였다.
+             1층 입구 · 계단실 문 자리는 비운다 */
+          const z0 = z + wallH, h = H - SL - 0.55 - wallH, sc = NX('#8f979c');
+          this.wallX(M, 0, W, 0.02, z0, h, sc, false, isG ? southGaps : []);
+          this.wallX(M, 0, W, D - 0.02, z0, h, sc, false, [[G.core.x - 0.75, G.core.x + 0.75]]);
+          M.box(W - 0.2, 0, z0, W + 0.02, D, z0 + h, sc, false, true);
+          // 루버 결 — 바깥면에 가로 줄 셋 · 3 m 마다 세로 멀리언
+          const lc = NX('#6f777c');
+          for (let k = 1; k <= 3; k++) {
+            const zz = z0 + h * k / 4;
+            for (const [y, gaps] of [[-0.1, isG ? southGaps : []], [D + 0.1, [[G.core.x - 0.75, G.core.x + 0.75]]]]) this.wallX(M, 0, W, y, zz - 0.03, 0.06, lc, false, gaps);
+            M.box(W + 0.02, 0, zz - 0.03, W + 0.06, D, zz + 0.03, lc, false, true);
+          }
+          for (let x = 3; x < W - 1; x += 3) for (const y of [-0.1, D + 0.1]) {
+            if (y < 1 && isG && southGaps.some(([g0, g1]) => x > g0 - 0.2 && x < g1 + 0.2)) continue;
+            if (y > 1 && Math.abs(x - G.core.x) < 1) continue;
+            M.box(x - 0.05, y - 0.05, z0, x + 0.05, y + 0.05, z0 + h, lc, false, true);
+          }
+          for (let y = 3; y < D - 1; y += 3) M.box(W + 0.02, y - 0.05, z0, W + 0.08, y + 0.05, z0 + h, lc, false, true);
         }
       } else {
-        // 광장 — 경사로 칸 덮개(지붕)와 낮은 화단
-        M.box(0, G.y_rb - 0.2, z, RW + 0.3, G.y_rt + 0.2, z + 0.9, '#9c978b', false, true);
+        /* 광장 — 경사로 칸은 열어 두고, 아래가 꺼진 가장자리에만 난간을, 경사로 입구에는 높이 제한 문틀을 둔다.
+           ★ 칸 전체를 상자로 덮으면 차가 그 속으로 드나드는 것처럼 보였다 */
+        this.plazaRamp(M, z);
       }
       // 경사로 칸 벽 (주차 구역과 경계) · 두 경사로 분리벽
       if (i < G.NL - 1) {
@@ -386,6 +410,35 @@ const PScene = {
     starts.push(all.p.length / 3);
     all.done();
     this.mesh = all; this.gStart = starts;      // 묶음 g(-1..) 은 [starts[g+1], starts[g+2])
+  },
+  /** 광장의 경사로 입구 — 차로마다 끝에서 경사로 면이 광장 높이면 입구(열림), 아니면 난간 */
+  plazaRamp(M, z) {
+    const G = this.G, RW = PK.RW, y0 = G.y_rb, y1 = G.y_rt, pc = NX('#b8b2a4'), t = 0.2, ph = 1.1;
+    const lanes = [[0, 3.62], [3.98, RW]];
+    const rampZ = (x, y) => {     // 그 자리 맨 위 경사로 면 높이 — 경사로는 층마다 같은 자리에 겹친다
+      let best = null;
+      for (const ed of G.ramps) for (let k = 0; k < ed.n; k++) {
+        if (Math.hypot(ed.x[k] - x, ed.y[k] - y) < 2.2 && ed.z[k] <= z + 0.5 && (best == null || ed.z[k] > best)) best = ed.z[k];
+      }
+      return best;
+    };
+    // 긴 두 변 (서쪽 바깥 · 동쪽 광장 쪽) 과 두 차로 사이 칸막이
+    M.box(0, y0, z, t, y1, z + ph, pc, false, true);
+    M.box(RW - t / 2, y0, z, RW + t / 2, y1, z + ph, pc, false, true);
+    M.box(3.62, y0, z, 3.98, y1, z + ph, pc, false, true);
+    // 두 끝 — 경사로 면이 광장과 같은 높이인 차로만 연다
+    for (const [ye, dir] of [[y0, 1], [y1, -1]]) for (const [a, b] of lanes) {
+      const rz = rampZ((a + b) / 2, ye + dir * 0.8);
+      if (rz != null && Math.abs(rz - z) < 0.6) {
+        // 열린 입구 — 기둥 둘과 높이 제한 막대 (노랑 · 검정)
+        const zt = z + 2.6;
+        for (const x of [a + 0.12, b - 0.12]) M.box(x - 0.1, ye - 0.1, z, x + 0.1, ye + 0.1, zt + 0.25, NX('#5d6268'), false, true);
+        M.box(a, ye - 0.12, zt, b, ye + 0.12, zt + 0.25, '#e0b13a', false, false);
+        for (let x = a + 0.3; x < b - 0.3; x += 0.7) M.quad([x, ye - 0.125, zt], [x + 0.35, ye - 0.125, zt], [x + 0.35, ye - 0.125, zt + 0.25], [x, ye - 0.125, zt + 0.25], '#2a2a2e');
+        continue;
+      }
+      M.box(a, ye - t / 2, z, b, ye + t / 2, z + ph, pc, false, true);
+    }
   },
   /** 지하주차장 위 지면 광장 — 길 · 경사로 · 코어를 비켜 화단 나무와 벤치 */
   plazaTrees(M, z) {

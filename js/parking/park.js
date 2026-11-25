@@ -44,7 +44,7 @@ class PCar {
     this.a = rng.range(1.0, 1.5); this.b = 1.9;
     this.sqrtAB = Math.sqrt(this.a * this.b);
     this.stall = null; this.plan = null; this.man = null;
-    this.visited = new Set(); this.seen = new Set();
+    this.visited = new Set(); this.seen = new Set(); this.laps = 0;
     this.res = [];              // 예약한 합류 노드들
     this.blink = 0; this.brake = false; this.rev = false;
     this.x = 0; this.y = 0; this.z = 0; this.h = 0; this.p = 0;
@@ -170,8 +170,10 @@ class ParkSim {
     if (this.time >= this.tIn) { if (this.rng.next() < pf.in) this.pending++; this.tIn = this.time + this.nextExp(cfg.inRate); }
     if (this.pending > 0 && this.spawn(G.streetIn, 'park')) this.pending--;
     if (this.batch > 0) { const v = this.spawn(G.streetIn, 'park'); if (v) { v.noBalk = true; this.batch--; } }   // 일부러 보낸 차는 지나치지 않는다
-    if (this.time >= this.tThru) { if (this.rng.next() > pf.thru || this.spawn(G.streetIn, 'thru')) this.tThru = this.time + this.nextExp(cfg.thruRate); }
-    if (this.time >= this.tThruE) { if (this.rng.next() > pf.thru || this.spawn(G.streetEB, 'thru')) this.tThruE = this.time + this.nextExp(cfg.thruRate); }
+    // 통과 교통 — 방향마다 thruRate, 차로가 여럿이면 고루 나눈다 (한 차로면 난수를 더 뽑지 않는다)
+    const lane = (a) => (a.length > 1 ? a[Math.floor(this.rng.next() * a.length)] : a[0]);
+    if (this.time >= this.tThru) { if (this.rng.next() > pf.thru || this.spawn(lane(G.thruW), 'thru')) this.tThru = this.time + this.nextExp(cfg.thruRate); }
+    if (this.time >= this.tThruE) { if (this.rng.next() > pf.thru || this.spawn(lane(G.thruE), 'thru')) this.tThruE = this.time + this.nextExp(cfg.thruRate); }
     // 출차 요청 — 세워 둔 차 하나를 고른다
     if (this.time >= this.tOut && this.rng.next() >= pf.out) this.tOut = this.time + this.nextExp(cfg.outRate);
     if (this.time >= this.tOut) {
@@ -291,6 +293,8 @@ class ParkSim {
       const best = this.nearestUnvisited(v, nd);
       if (best) return best;
       v.visited.clear(); v.seen.clear();   // 다 봤다 — 처음부터 다시 돈다
+      // 두 바퀴를 다 돌고도 못 찾으면 나간다 (만차인데 들여보낸 차가 끝없이 맴돌지 않게)
+      if (++v.laps >= 2 && !v.stall && !v.plan) { v.giveUp = true; v.searching = false; this.st.gaveUp++; return this.choose(v, nd); }
     }
     return nd.outs.find((e) => e.kind !== 'exit') || nd.outs[0];
   }
@@ -361,7 +365,7 @@ class ParkSim {
       v.balkChk = true;
       // 입구 대기열이 길거나 '만차' 표시가 켜져 있으면 대개 들어가지 않고 지나간다
       const S = this.summary();
-      if (S.qIn >= this.cfg.balk || (S.free - S.hunting <= 0 && this.rng.chance(0.8))) { v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; this.planAhead(v); }
+      if (S.qIn >= this.cfg.balk || ((this.cfg.fullGate !== 'open' || this.G.mech) && S.free - S.hunting <= 0 && this.rng.chance(0.8))) { v.balk = true; this.st.lost++; v.role = 'thru'; v.route.length = v.ri + 1; this.planAhead(v); }
     }
     // ★ 면을 잡았거나 주차 계획이 있는 차는 포기시키지 않는다 — 계획(후진 대기 구간)을 쥔 채 포기하면 통로가 영영 막힌다
     // 도로에서 입구 차례를 기다리다 만차가 이어지면 포기하고 지나간다 (진입로에 들어선 차는 차단기 앞에서 기다린다)
@@ -596,8 +600,9 @@ class ParkSim {
       g.tot = g.t;
     }
   }
-  /** 만차 판정 — 빈 면이 탐색 중인 차보다 많아야 들인다 */
+  /** 만차 판정 — 빈 면이 탐색 중인 차보다 많아야 들인다. '만차여도 들여보냄' 차단기는 늘 연다 (만차 표시도 없다) */
   admit() {
+    if (this.cfg.fullGate === 'open' && !this.G.mech) return true;
     let free = 0, hunting = 0;
     for (const s of this.G.stalls) if (s.state === 'free') free++;
     for (const v of this.cars) if (v.inside && v.searching && !v.stall) hunting++;
@@ -612,8 +617,9 @@ class ParkSim {
       v.route.length = v.ri + 1; v.path = null;
       this.planAhead(v);
     } else {
-      this.st.outN++;
-      this.st.exitT.push(this.time - v.tReq); this.logEvt('출차', v, this.time - v.tReq);
+      // ★ 못 찾고 나가는 차는 출차가 아니다 — 호출 시각(tReq)이 없어 출차 소요에 넣으면 '시작부터 지난 시간'이 섞인다
+      if (v.leaving) { this.st.outN++; this.st.exitT.push(this.time - v.tReq); this.logEvt('출차', v, this.time - v.tReq); }
+      else if (v.tGate) this.logEvt('포기', v, this.time - v.tGate);
       v.done = true; v.inside = false;
       v.route.length = v.ri + 1; v.path = null;
       this.planAhead(v);

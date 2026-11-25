@@ -353,12 +353,13 @@ function buildGarage(cfg) {
     const X = split(pX, xx, gateY + 5, gateY - 5.5, -3.2, 'exit', lvN[gi].dX, nSx);
     G.entry = E.l1; G.exit = X.pre; G.entryEnd = E.post.to;
   }
-  // 반대 차로 (통과 교통만, 주차장과 무관)
-  p = filletPath([[xL, ys - 3.3], [xR, ys - 3.3]], r, 1);
-  const eb = addEdge('street', -1, p.X, p.Y, 0, null, () => 0, 12.5);
-  const nE0 = node(xL, ys - 3.3, 0, -1), nE1 = node(xR, ys - 3.3, 0, -1); link(eb, nE0, nE1);
-  G.streetEB = eb;
-  G.sinks = new Set([nS1.id, nE1.id]);
+  // 통과 차로 — 서행 차로 안쪽 같은 방향 차로 · 반대 방향 차로 (주차장과 무관)
+  roadLanes(G, cfg, ys, xL, xR, nS1, (xa, ya, xb, yb, vmax) => {
+    const q = filletPath([[xa, ya], [xb, yb]], r, 1);
+    const e = addEdge('street', -1, q.X, q.Y, 0, null, () => 0, vmax);
+    const n1 = node(xb, yb, 0, -1); link(e, node(xa, ya, 0, -1), n1);
+    return { e, end: n1 };
+  });
 
   placeStalls(G);
   // 계단 · 승강기 동 — 북쪽 벽 바깥, 동쪽 끝 통로 위 (모서리 근처는 주차면이 없어 걸어갈 틈이 있다)
@@ -379,6 +380,20 @@ function buildGarage(cfg) {
 }
 
 /** 주차면 · 기둥 */
+/** 바깥 도로 — 방향마다 cfg.road(1~3) 차로. 서행 차로(주차장 쪽 첫 차로)는 이미 있고 나머지는 통과 차만 다닌다.
+    차로 하나가 3.3 m — 서쪽으로 가는 차로가 주차장 쪽, 그 너머 중앙선, 동쪽으로 가는 차로 */
+function roadLanes(G, cfg, ys, xL, xR, curbEnd, mk) {
+  const n = clamp(cfg.road | 0, 1, 3), LW = 3.3;
+  G.road = n; G.thruW = [G.streetIn]; G.thruE = [];
+  G.yFar = ys - LW * (2 * n - 1) - 1.7;              // 맞은편 길가 (보도가 시작하는 곳)
+  G.yCenter = ys - LW * (n - 1) - 1.8;               // 중앙선
+  const sinks = [curbEnd.id];
+  for (let k = 1; k < n; k++) { const L = mk(xR, ys - LW * k, xL, ys - LW * k, 13.9); G.thruW.push(L.e); sinks.push(L.end.id); }
+  for (let j = 0; j < n; j++) { const L = mk(xL, ys - LW * (n + j), xR, ys - LW * (n + j), j ? 13.9 : 12.5); G.thruE.push(L.e); sinks.push(L.end.id); }
+  G.streetEB = G.thruE[0];
+  G.sinks = new Set(sinks);
+}
+
 function placeStalls(G) {
   const { W, D, NL, xi, xf, e, yb, yt } = G;
   const r = PK.r, sw = PK.stallW;

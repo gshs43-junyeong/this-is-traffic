@@ -6,7 +6,7 @@
 const PCFG_DEFAULT = {
   W: 64, D: 52, U: 4, B: 2,
   inRate: 220, outRate: 200, thruRate: 240, initOcc: 0.55,
-  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat', throat: 0,
+  revShare: 0.7, gate: 'lpr', guide: false, balk: 7, seed: 7, lanes: 1, kind: 'ramp', pattern: 'flat', throat: 0, road: 1, fullGate: 'stop',
 };
 const PPRESETS = {
   tower: { W: 52, D: 46, U: 6, B: 0, inRate: 200, outRate: 160, initOcc: 0.5, label: '주차타워' },
@@ -387,6 +387,7 @@ const PApp = {
     for (const id of ['guide', 'gate', 'pattern']) $('#c_' + id).addEventListener('change', () => { this.readPanel(false); this.live(); });
     $('#c_kind').addEventListener('change', () => { this.est(); this.dimFields(); });
     for (const id of ['#c_gate', '#c_lanes']) $(id).addEventListener('change', () => this.demWarn());
+    $('#c_fullGate').addEventListener('change', () => { this.readPanel(false); this.live(); });
     for (const el of $$('#panel input[type=range]')) el.addEventListener('input', () => this.readPanel(false));
     this.setSpeed(1);
   },
@@ -524,6 +525,7 @@ const PApp = {
     $('#c_gate').value = c.gate;
     $('#c_pattern').value = c.pattern || 'flat';
     $('#c_lanes').value = String(c.lanes || 1);
+    $('#c_road').value = String(c.road || 1); $('#c_fullGate').value = c.fullGate || 'stop';
     $('#c_kind').value = c.kind || 'ramp';
     this.dimFields();
     this.est();
@@ -537,14 +539,15 @@ const PApp = {
       const o = $('#v_' + k); if (o) o.textContent = this.fields[k][0](v);
     }
     c.guide = $('#c_guide').checked; c.gate = $('#c_gate').value; c.pattern = $('#c_pattern').value;
-    if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; }
+    c.fullGate = $('#c_fullGate').value;
+    if (all) { c.lanes = +$('#c_lanes').value; c.kind = $('#c_kind').value; c.road = +$('#c_road').value; }
     this.est();
     this.save();
   },
   /** 기계식에서 쓰지 않는 칸은 흐리게 */
   dimFields() {
     const mech = $('#c_kind').value === 'mech';
-    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare', 'c_throat']) {
+    for (const id of ['c_D', 'c_lanes', 'c_guide', 'c_gate', 'c_revShare', 'c_throat', 'c_fullGate']) {
       const f = $('#' + id) && $('#' + id).closest('.fld');
       if (f) { f.style.opacity = mech ? 0.4 : 1; f.title = mech ? '기계식에서는 쓰지 않는다' : ''; }
     }
@@ -641,7 +644,7 @@ const PApp = {
       this.logN = L.length; this.logSim = this.sim;
       const pat = this.cfg.pattern && this.cfg.pattern !== 'flat';
       const when = (t) => { if (!pat) return mmss(t); const h = this.sim.hour() - (this.sim.time - t) / 3600; return pad2(Math.floor(h)) + ':' + pad2(Math.floor((h % 1) * 60)); };
-      const col = { 주차: '#7fe0a8', 입고: '#7fe0a8', 출차: '#ffd59f', 출고: '#ffd59f' };
+      const col = { 주차: '#7fe0a8', 입고: '#7fe0a8', 출차: '#ffd59f', 출고: '#ffd59f', 포기: '#ff8a7a' };
       $('#evLog').innerHTML = L.slice(-4).reverse().map((e) =>
         `<div data-id="${e.id}"><span class="t">${when(e.t)}</span><span style="color:${col[e.kind]}">${e.kind}</span><span>${e.cls} #${e.id}${e.level ? ' · ' + e.level : ''}</span><span class="d">${mmss(e.dur)}</span></div>`).join('') ||
         '<div style="color:#69728a;cursor:default">주차 · 출차가 끝나면 여기 쌓입니다</div>';
@@ -754,12 +757,13 @@ const PApp = {
       // 입구 · 출구
       // 입구 안내판 — 빈 자리 수 (찾는 차 몫은 뺀다) · 만차
       const S = this.lastS || this.sim.summary(), freeN = Math.max(0, S.free - S.hunting);
-      for (const [ed, t] of [[G.gated.find((e) => e.kind === 'entry'), freeN ? `입구 · 빈 자리 ${freeN}` : '입구 · 만차'], [G.gated.find((e) => e.kind === 'exit'), '출구']]) {
+      const openG = this.cfg.fullGate === 'open';
+      for (const [ed, t] of [[G.gated.find((e) => e.kind === 'entry'), freeN ? `입구 · 빈 자리 ${freeN}` : openG ? '입구 · 만차 (들여보냄)' : '입구 · 만차'], [G.gated.find((e) => e.kind === 'exit'), '출구']]) {
         const q0 = ed.at(ed.gate.s - 6), q = Render.point(q0.x, q0.y, 2.6);
         if (!q) continue;
         ctx.fillStyle = '#10141bcc'; const w = ctx.measureText(t).width + 12;
         ctx.fillRect(q.x - w / 2, q.y - 10, w, 20);
-        ctx.fillStyle = t === '출구' ? '#ffc07a' : freeN ? '#7fe0a8' : '#ff6b5e'; ctx.fillText(t, q.x, q.y);
+        ctx.fillStyle = t === '출구' ? '#ffc07a' : freeN ? '#7fe0a8' : openG ? '#ffb340' : '#ff6b5e'; ctx.fillText(t, q.x, q.y);
       }
       // 진입 완충 — 면을 뺀 자리가 빠진 것처럼 보이지 않게 (그 층이 맨 위로 보일 때만)
       const th = +G.cfg.throat || 0, en = G.entryEnd;
