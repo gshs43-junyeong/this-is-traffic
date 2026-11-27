@@ -1526,11 +1526,26 @@ const Scene = {
       }
       if (v.brake && dist < 180) Render.glow(lx - ch * 0.05, ly - sh * 0.05, bz + zT, Math.max(size, 3 * px) * 2.8, '#ff4a30', '#ff4a3055', 0.66);
     }
-    // 방향지시등
-    if (v.blink && facing < 0 && (Math.floor((sc.time + v.blinkPhase) * 1.6) & 1)) {
-      const side = v.blink * (corr.dir > 0 ? 1 : -1);
-      const lx = rearX - sh * p.wid * 0.5 * side, ly = rearY + ch * p.wid * 0.5 * side;
-      Render.mark(lx - ch * 0.03, ly - sh * 0.03, bz + zT, size, size * 0.6, '#ffa825');
+    /* 방향지시등. v.blink > 0 은 차로 번호가 커지는 쪽 = 중앙분리대에서 멀어지는 쪽 = 진행방향 오른쪽.
+       hdg 에 이미 차도 방향이 들어 있으므로 차의 좌우는 hdg 만으로 정해진다. (-sh, ch) 가 차의 왼쪽이다.
+       ★ 예전에는 여기에 차도 방향(corr.dir)을 한 번 더 곱해 내 진행방향 차들의 깜빡이가 좌우 반대로 켜졌다. */
+    if (v.blink && (Math.floor((sc.time + v.blinkPhase) * 1.6) & 1)) {
+      const amber = '#ffb020';
+      const ox = sh * v.blink, oy = -ch * v.blink;          // 깜빡이는 쪽으로 향하는 단위 벡터
+      const front = facing > 0;                              // 앞에서 보면 앞쪽 지시등, 뒤에서 보면 뒤쪽
+      const ex = front ? bx : rearX, ey = front ? by : rearY, along = front ? 0.04 : -0.04;
+      const zB = front ? bz + zT * 0.9 : bz + zT + 0.20;    // 뒤쪽은 미등 바로 위에 얹어 겹치지 않게
+      const lat = p.wid * 0.40;
+      const lx = ex + ox * lat + ch * along, ly = ey + oy * lat + sh * along;
+      if (dist < 110) {
+        const hwl = 0.24, hh = 0.11;
+        const P = (dy, dz) => [lx + ox * dy, ly + oy * dy, zB + dz];
+        this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), amber);
+      } else {
+        Render.mark(lx, ly, zB, Math.max(size * 2.4, 4.5 * px), Math.max(size * 1.5, 3.2 * px), amber);
+      }
+      // 번짐 — 멀리서도 한눈에 읽히도록 크게
+      Render.glow(lx, ly, zB, Math.max(size, 3.5 * px) * 4.6, '#ffc040', '#ffa82577', 0.95);
     }
     // 전조등 — 우리를 향한 차만
     if (night && facing > 0) {
