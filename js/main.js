@@ -267,6 +267,12 @@ const App = {
       case 'reset': if (this.spec) this.exitSpectate(); else this.resetPlayer(); break;
       case 'specPrev': this.specJump(-1); break;
       case 'specNext': this.specJump(1); break;
+      case 'specZoomIn': if (this.spec) this.spec.dist = clamp(this.spec.dist / 1.5, 6, 420); break;
+      case 'specZoomOut': if (this.spec) this.spec.dist = clamp(this.spec.dist * 1.5, 6, 420); break;
+      case 'specTop':   // 낮게 옆에서 → 비스듬히 → 거의 수직으로 내려다보기, 를 돌아가며
+        if (this.spec) { const P = [-0.15, -0.45, -1.3]; const i = P.findIndex(v => v < this.spec.pitch - 0.05); this.spec.pitch = P[i < 0 ? 0 : i]; }
+        break;
+      case 'specTurn': if (this.spec) this.spec.yawRel = wrapPi(this.spec.yawRel + Math.PI); break;
     }
     this.syncButtons();
   },
