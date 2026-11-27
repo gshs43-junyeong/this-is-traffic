@@ -1709,10 +1709,12 @@ const Scene = {
         const P = (dy, dz) => [lx + ox * dy, ly + oy * dy, zB + dz];
         this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), amber);
       } else {
-        Render.mark(lx, ly, zB, Math.max(size * 2.4, 4.5 * px), Math.max(size * 1.5, 3.2 * px), amber);
+        // 멀리서는 미등과 같은 비율로 — 화면 최소 크기를 두면 먼 차들까지 크게 번쩍여 시선을 빼앗았다
+        Render.mark(lx, ly, zB, size * 1.3, size * 0.8, amber);
       }
-      // 번짐 — 멀리서도 한눈에 읽히도록 크게
-      Render.glow(lx, ly, zB, Math.max(size, 3.5 * px) * 4.6, '#ffc040', '#ffa82577', 0.95);
+      // 번짐 — 가까이에서만. 40 m 부터 옅어져 160 m 너머에서는 없다
+      const gA = clamp(1 - (dist - 40) / 120, 0, 1);
+      if (gA > 0.02) Render.glow(lx, ly, zB, Math.max(size, 2.5 * px) * 4.2, '#ffc040', '#ffa82577', 0.95 * gA);
     }
     // 전조등 — 우리를 향한 차만
     if (night && facing > 0) {
