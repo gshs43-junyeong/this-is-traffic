@@ -751,7 +751,7 @@ const Scene = {
         const e = AR[i], corr = e.corr;
         const sl = corr.dir > 0 ? sRoad : corr.L - sRoad;
         const t = e.on ? (e.s - sl) : (sl - e.s);
-        if (t < 0 || t > corr.rampLen + RAMP_VISUAL_EXTENSION) continue;
+        if (t < 0 || t > e.maxT) continue;
         s.nearIC = true;
         // 램프가 실제로 놓인 구간에서만 비탈면을 잘라 노면을 보존한다.
         const tc = clamp(t, 0, corr.rampLen + RAMP_VISUAL_EXTENSION);
@@ -767,8 +767,9 @@ const Scene = {
            램프가 군데군데 땅에 묻혀 끊겨 보였다. */
         const inPos = corr.dir > 0 ? Math.max(m + inU - RAMP_SH_IN, s.aSh + 0.8) : Math.min(-(m + inU - RAMP_SH_IN), s.bSh - 0.8);
         const inZ = g.z + rd.crossZ(g, inPos) + corr.rampDz(tc);
-        if (corr.dir > 0) s.rampR = { in: inPos, inZ, out: edge, foot, footZ };
-        else s.rampL = { in: inPos, inZ, out: edge, foot, footZ };
+        const grass = !e.on && e.paveT != null && t > e.paveT;     // 분기점 — 고리로 갈라진 뒤 (노면 없음)
+        if (corr.dir > 0) s.rampR = { in: inPos, inZ, out: edge, foot, footZ, grass };
+        else s.rampL = { in: inPos, inZ, out: edge, foot, footZ, grass };
       }
     }
     return s;
@@ -849,14 +850,15 @@ const Scene = {
         lo = (corr.dir > 0 ? s0 : corr.L - s1) - 420; hi = (corr.dir > 0 ? s1 : corr.L - s0) + 420;
       }
       const rampDrawLen = corr.rampLen + RAMP_VISUAL_EXTENSION;
-      for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1 });
-      for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
+      for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1, maxT: rampDrawLen, mouth: /IC$/.test(r.name) });
+      for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0, maxT: rampDrawLen, paveT: o.jct ? JCT_LOOP_T : rampDrawLen, mouth: /IC$/.test(o.name) });
     }
     this.activeRamps = near;
     // 램프의 실제 시작·끝을 단면 경계와 맞춰 지형 절단과 접속부 틈을 막는다.
     for (const e of near) {
-      const len = e.corr.rampLen + RAMP_VISUAL_EXTENSION;
+      const len = e.maxT;
       const ends = e.on ? [e.s - len, e.s] : [e.s, e.s + len];
+      if (e.paveT && e.paveT < len) ends.push(e.s + e.paveT);
       for (const localS of ends) {
         const roadS = e.corr.dir > 0 ? localS : e.corr.L - localS;
         if (roadS > s0 && roadS < s1) stations.push(roadS);
@@ -929,6 +931,16 @@ const Scene = {
      통째로 사라졌다 — 양 끝 중 하나라도 앞에 있으면 그린다. */
   bucket(buckets, stations, corr, v, sc) {
     const rd = this.road;
+    // 분기점 연결로 위의 차 — 자리는 hwyfx 가 준다
+    if (v.rampT > 0 && typeof HwyFx !== 'undefined') {
+      const pose = HwyFx.rampPose(v, corr);
+      if (pose) {
+        if (pose.hide) return;
+        const d = Render.depth(pose.x, pose.y, pose.z + 1);
+        if (d > 0.12) this.lateVeh.push({ v, corr, d });
+        return;
+      }
+    }
     const sF = corr.roadS(v.s), sR = corr.roadS(v.s - v.len);
     const dAt = (sr) => {
       const g = rd.at(sr);
@@ -1070,16 +1082,17 @@ const Scene = {
       const e = list[i], corr = e.corr, L = corr.L;
       const sa = corr.dir > 0 ? a.sRoad : L - a.sRoad;
       const sb = corr.dir > 0 ? b.sRoad : L - b.sRoad;
-      if (e.on) this.rampSeg(ctx, a, b, dist, corr, e.s - sa, e.s - sb, sc, slope);
-      else this.rampSeg(ctx, a, b, dist, corr, sa - e.s, sb - e.s, sc, slope);
+      this.rampMouth = e.mouth;
+      if (e.on) this.rampSeg(ctx, a, b, dist, corr, e.s - sa, e.s - sb, sc, slope, e.maxT);
+      else this.rampSeg(ctx, a, b, dist, corr, sa - e.s, sb - e.s, sc, slope, e.maxT, e.paveT);
     }
   },
   /** 노즈로부터의 거리 ta, tb 사이의 램프 한 토막.
       노즈 쪽에서는 램프가 차로 하나 폭으로 좁아져 가감속차로와 그대로 이어진다.
       예전처럼 안쪽 경계를 갓길 바깥선에 고정하면, 노즈 앞 60 m 가 실 한 가닥으로
       줄었다 사라져 도로가 끊긴 것처럼 보였다. */
-  rampSeg(ctx, a, b, dist, corr, ta, tb, sc, slope) {
-    const LEN = corr.rampLen + RAMP_VISUAL_EXTENSION;
+  rampSeg(ctx, a, b, dist, corr, ta, tb, sc, slope, maxT, paveT) {
+    const LEN = maxT;
     if ((ta < 0 && tb < 0) || (ta > LEN && tb > LEN)) return;
     const t0 = clamp(ta, 0, LEN), t1 = clamp(tb, 0, LEN);
     if (Math.abs(t0 - t1) < 0.01) return;
@@ -1113,6 +1126,13 @@ const Scene = {
       this.groundQuad(ea, eb, this.ptZ(b, fb[0], fb[1]), this.ptZ(a, fa[0], fa[1]), pal.grass, dist, 91 + Math.floor(a.sRoad / 37));
       return;
     }
+    /* 분기점 — 고리로 갈라진 뒤의 기본 진출로 자리는 풀밭으로 덮는다(지면 띠는 램프가 있는 것처럼 그대로 둔다 —
+       ★ 지면 띠의 모양을 바꾸면 램프 있는 단면 · 없는 단면 사이에 하늘이 비치는 틈이 생겼다) */
+    if (paveT != null && Math.min(t0, t1) >= paveT - 0.01) {
+      const siA = Math.max(inA - RAMP_SH_IN, eA), siB = Math.max(inB - RAMP_SH_IN, eB);
+      this.groundQuad(P(a, siA, t0), P(b, siB, t1), P(b, outB + sh, t1), P(a, outA + sh, t0), pal.grass, dist, 77 + Math.floor(a.sRoad / 29));
+      return;
+    }
     // 포장 + 바깥 갓길
     Render.layer = 1;                                  // 본선 갓길과 겹치는 노면
     if (outA - inA > 0.05 || outB - inB > 0.05) {
@@ -1126,8 +1146,8 @@ const Scene = {
     }
     Render.layer = 2;
     if (dist < 520) {
-      // 바깥 가장자리선
-      this.quad(P(a, outA - 0.31, t0), P(b, outB - 0.31, t1), P(b, outB - 0.13, t1), P(a, outA - 0.13, t0), white);
+      // 바깥 가장자리선 — 나들목은 바깥 접속점에서 영업소 접속로가 붙으므로 그 어귀(30 m)는 비운다
+      if (!(this.rampMouth && Math.max(t0, t1) > LEN - 31)) this.quad(P(a, outA - 0.31, t0), P(b, outB - 0.31, t1), P(b, outB - 0.13, t1), P(a, outA - 0.13, t0), white);
       /* 안쪽(왼쪽) 가장자리선 — 램프 노면이 있는 구간 전체에 긋는다. 노즈 부근에서는 본선
          가장자리선과 V 자로 모여 실제 분류·합류부(gore) 모양이 된다.
          ★ '본선에서 떨어진 뒤부터'만 그으면 나가고 들어오는 구간의 왼쪽 선이 비었다. */
@@ -1316,7 +1336,7 @@ const Scene = {
     };
     /* ★ 램프가 본선에 붙어 있는 구간(사이가 6 m 안 — 노즈 앞뒤)에는 본선 바깥 가드레일 · 시선유도표를 두지 않는다.
        본선 갓길 끝에 그대로 세우면 합류 · 분류하는 램프 노면을 가로막았다. 대신 램프 바깥 끝에 가드레일을 둔다. */
-    const gap = (sec, R) => { const r = R ? sec.rampR : sec.rampL; return r ? (R ? r.in - sec.aSh : sec.bSh - r.in) : Infinity; };
+    const gap = (sec, R) => { const r = R ? sec.rampR : sec.rampL; return r && !r.grass ? (R ? r.in - sec.aSh : sec.bSh - r.in) : Infinity; };
     const nearR = Math.min(gap(a, 1), gap(b, 1)) < 6, nearL = Math.min(gap(a, 0), gap(b, 0)) < 6;
     const railZ = (ua, za, ub, zb) => {
       this.quad(this.ptZ(a, ua, za + 0.50), this.ptZ(b, ub, zb + 0.50), this.ptZ(b, ub, zb + 0.62), this.ptZ(a, ua, za + 0.62), beam);
@@ -1324,8 +1344,8 @@ const Scene = {
     };
     if (needR && !nearR) rail(a.aSh + 0.5);
     if (needL && !nearL) rail(a.bSh - 0.5);
-    if (needR && a.rampR && b.rampR) railZ(a.rampR.out + 0.3, a.rampR.inZ, b.rampR.out + 0.3, b.rampR.inZ);
-    if (needL && a.rampL && b.rampL) railZ(a.rampL.out - 0.3, a.rampL.inZ, b.rampL.out - 0.3, b.rampL.inZ);
+    if (needR && a.rampR && b.rampR && !a.rampR.grass && !b.rampR.grass) railZ(a.rampR.out + 0.3, a.rampR.inZ, b.rampR.out + 0.3, b.rampR.inZ);
+    if (needL && a.rampL && b.rampL && !a.rampL.grass && !b.rampL.grass) railZ(a.rampL.out - 0.3, a.rampL.inZ, b.rampL.out - 0.3, b.rampL.inZ);
     // 시선유도표 (야간에 특히 눈에 띈다)
     if (lod >= 2 && dist < 220 && (Math.floor(a.sRoad / 44) !== Math.floor(b.sRoad / 44))) {
       const col = sc.timeOfDay === 'night' ? '#ffe680' : '#e8e2c8';
@@ -1635,7 +1655,9 @@ const Scene = {
   vehicle(ctx, v, corr, sc) {
     if (v.isPlayer && sc.hidePlayer) return;   // 운전석 시점 — 카메라가 차 안에 있다
     const rd = this.road;
-    const sRoad = corr.roadS(v.s);
+    const pose = v.pose || (v.rampT > 0 && typeof HwyFx !== 'undefined' ? HwyFx.rampPose(v, corr) : null);
+    if (pose && pose.hide) return;
+    const sRoad = corr.roadS(clamp(v.s, 0, corr.L));     // 분기점 연결로 위의 차는 s 가 노선 밖일 수 있다
     const g = rd.at(sRoad);
     const u = corr.dir > 0 ? (g.med + v.u) : -(g.med + v.u);
     /* 차도가 벌어지는 구간(쌍굴 이격)과 램프에서는 진행방향이 중심선과 어긋난다.
@@ -1646,9 +1668,10 @@ const Scene = {
       const dl = (corr.rampLat(v.rampT + 2) - corr.rampLat(v.rampT - 2)) / 4;
       gLocal += v.onRamp ? -dl : dl;      // 진입로는 t 가 줄고, 진출로는 t 가 는다
     }
-    const hdg = g.hdg + (corr.dir > 0 ? 0 : Math.PI) + v.yawRel * corr.dir - Math.atan(gLocal);
+    let hdg = g.hdg + (corr.dir > 0 ? 0 : Math.PI) + v.yawRel * corr.dir - Math.atan(gLocal);
     const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
-    const bx = g.x + nx * u, by = g.y + ny * u, bz = g.z + rd.crossZ(g, u) + (v.dz || 0);
+    let bx = g.x + nx * u, by = g.y + ny * u, bz = g.z + rd.crossZ(g, u) + (v.dz || 0);
+    if (pose) { bx = pose.x; by = pose.y; bz = pose.z; hdg = pose.hdg; }
     const dist = Render.depth(bx, by, bz);
     if (dist < 0.08 || dist > Render.drawDist + 60) return;
 

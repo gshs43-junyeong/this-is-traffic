@@ -85,7 +85,12 @@ const MEM = { vRef: 70 * KMH, gain: 0.25, tauUp: 8, tauDown: 80 };   // 용량 �
 /* 차로 간 마찰 (Daganzo 2002; Jang & Cassidy 2012): 옆 차로가 막혀 있으면
    빈 차로도 그 속도보다 크게 빠르게 달리지 않는다. */
 const FRICTION = { dv: 40 * KMH, look: 70 };
-const ON_GORE = RAMP_LEN * 2;    // 램프 두 곡선이 바깥 접속점에서 만나도록 배치
+const ON_GORE = RAMP_LEN * 2;
+/* 분기점 램프는 다른 고속도로의 연결로까지 이어진다 — 진출 차는 고리로 돌아 건너는 고속도로의 늘어난 차로를 따라
+   멀리까지 달리고, 진입 차는 건너는 고속도로 먼 곳의 진출 전용 차로에서 나타나 연결로를 돌아 들어온다.
+   길이는 그 길(hwyfx.js 분기점)을 따라 잰 거리 — 그림은 rampT 를 그 길 위 거리로 읽는다 */
+const JCT_OFF_LEN = 1500, JCT_ON_LEN = 1500;
+const JCT_LOOP_T = 75;           // 분기점 진출로가 고리로 갈라지는 자리 (노즈에서) — 그 뒤 기본 진출로는 그리지 않는다    // 램프 두 곡선이 바깥 접속점에서 만나도록 배치
 
 let _vid = 1;
 
@@ -295,11 +300,12 @@ class Corridor {
     this.onRamps = []; this.offRamps = [];
     for (const ic of this.icLocal) {
       const acc = this.auxAt(ic.s + ON_GORE + 40);
+      const jct = /분기점$/.test(ic.name);
       this.onRamps.push({
-        s: ic.s + ON_GORE, name: ic.name, queue: [], len: RAMP_LEN, wait: 0, served: 0, rejected: 0,
+        s: ic.s + ON_GORE, name: ic.name, queue: [], len: jct ? Math.max(RAMP_LEN, Math.min(JCT_ON_LEN, ic.s + ON_GORE - 20)) : RAMP_LEN, wait: 0, jct, served: 0, rejected: 0,
         auxEnd: acc ? acc.s1 : ic.s + ON_GORE + ACCEL_LEN, qDelay: 0,
       });
-      this.offRamps.push({ s: ic.s, name: ic.name, taken: 0, out: [] });
+      this.offRamps.push({ s: ic.s, name: ic.name, taken: 0, out: [], len: jct ? JCT_OFF_LEN : RAMP_LEN, jct });
     }
   }
 
@@ -1282,7 +1288,7 @@ class Corridor {
         const t = Math.max(0, v.s - o.s);
         v.u = this.rampLat(t); v.dz = this.rampDz(t); v.rampT = t;
         v.pushHist();
-        if (t > this.rampLen) { o.out.splice(i, 1); v.alive = false; if (this.pool.length < 2500) this.pool.push(v); }
+        if (t > o.len) { o.out.splice(i, 1); v.alive = false; if (this.pool.length < 2500) this.pool.push(v); }
       }
     }
   }
