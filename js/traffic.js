@@ -690,7 +690,8 @@ class Corridor {
       v.u += (v.uT - v.u) * U_LERP;      // 차로 중심으로 지수 접근 (tau = 0.62 s) — 램프·작은 보정
     }
     v.yawRel = v.v > 1 ? Math.atan2((v.u - uPrev) / dt, v.v) : 0;
-    if (v.pendingLane >= 0) v.signalT = Math.max(0, v.signalT - dt);
+    // 지시 시간은 지시등이 실제로 켜져 있을 때만 흐른다 — 틈을 기다리며 꺼 둔 동안은 멈춰 있다
+    if (v.pendingLane >= 0 && v.blink) v.signalT = Math.max(0, v.signalT - dt);
     if (v.pendingLane < 0 && Math.abs(v.u - v.uT) < 0.06) v.blink = 0;
     v.pushHist();
   }
@@ -785,8 +786,11 @@ class Corridor {
       if (mandLane >= 0 && v.pendingLane < 0) {
         v.pendingLane = mandLane;
         v.signalT = 0.85 + this.rng.next() * 0.35;
-        v.blink = mandLane > cur ? 1 : -1;
       }
+      /* 들어갈 틈이 없어 기다리는 동안은 지시등을 끈다 — 틈이 생겨 실제로 옮겨 갈 때 켠다.
+         그래야 지시등이 '지금 들어간다'는 뜻으로 읽힌다. 다만 합류 끝이 가까워 절박하면
+         (urg ≥ 0.7) 실제 운전자처럼 켜 두고 뒤차의 양보를 구한다. */
+      if (v.pendingLane >= 0) v.blink = mand.urg >= 0.7 ? (v.pendingLane > cur ? 1 : -1) : 0;
       return;
     }
     if (v.pendingLane !== bestLane) {
@@ -796,6 +800,7 @@ class Corridor {
       v.blink = bestLane > cur ? 1 : -1;
       return;
     }
+    v.blink = bestLane > cur ? 1 : -1;      // 기다리다 틈이 생겼다 — 이제 지시등을 켠다
     if (v.signalT <= 0) this.doLaneChange(v, bestLane, mand.dir === (bestLane > cur ? 1 : -1) ? mand.urg : 0);
   }
 

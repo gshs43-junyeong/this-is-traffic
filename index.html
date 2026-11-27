@@ -294,6 +294,10 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
           <div class="fld"><label>시간대</label>
             <select data-cfg="timeOfDay" data-live="1"><option value="day">주간</option><option value="dusk">황혼</option><option value="night">야간</option></select></div>
           <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbGfx" data-cfg="gfx" data-live="1">
+            <div><label for="cbGfx">그래픽 향상 (셰이더)</label>
+              <div class="hint">노면·풀밭 질감, 등화·햇빛 번짐(블룸), 가장자리 계단 제거(FXAA), 색 보정과 비네트. 느린 기기에서는 프레임이 떨어질 수 있다. 주소에 ?fx=1 을 붙여 켠 채로 시작할 수도 있다.</div></div></div>
+          <div class="fld chk" style="align-items:flex-start">
             <input type="checkbox" id="cbPeak" data-cfg="peak" data-live="1">
             <div><label for="cbPeak">첨두 수요 프로파일</label>
               <div class="hint">수요가 서서히 용량을 넘었다가 되돌아온다. 정체의 발생과 해소를 한 번에 볼 수 있다.</div></div></div>

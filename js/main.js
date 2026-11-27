@@ -30,6 +30,7 @@ const CFG_DEFAULT = {
   tunnelSep: 26,       // 쌍굴 이격 (m)
   bridgeShare: -10,    // 구조물 중 교량 비율 % (음수 = 지형대로)
   view: 'cockpit',     // cockpit | chase | high
+  gfx: false,          // 그래픽 향상 (셰이더 후처리 · 표면 잔결) — WebGL 일 때만
 };
 
 const WB = 2.75;                       // 축거 m
@@ -60,6 +61,9 @@ const App = {
       this.ctx = this.cv.getContext('2d', { alpha: false });
     }
     this.mapCv = document.getElementById('mapCv');
+    if (/[?&]fx=1/.test(location.search)) this.cfg.gfx = true;
+    Render.skyCanvas = this.skyCv;
+    Render.enhance = !!(this.cfg.gfx && Render.gl);
     UI.init(this);
     this.bindInput();
     this.rebuild();
@@ -178,6 +182,12 @@ const App = {
     if (key === 'weather') { this.corrA.rebuildCaps(); if (this.corrB) this.corrB.rebuildCaps(); }
     if (key === 'lanes' || key === 'twoWay') this.rebuildTraffic();
     if (key === 'timeOfDay' || key === 'view') { /* 렌더러가 매 프레임 읽는다 */ }
+    if (key === 'gfx') {
+      if (!Render.gl) { UI.toast('그래픽 향상은 WebGL 이 켜져 있을 때만 쓸 수 있습니다', 3); return; }
+      Render.enhance = !!this.cfg.gfx;
+      if (Render.enhance && !Render.initFx()) { Render.enhance = false; UI.toast('이 기기에서는 그래픽 향상 셰이더를 쓸 수 없습니다', 3); return; }
+      UI.toast(Render.enhance ? '그래픽 향상 켬 — 표면 질감 · 블룸 · FXAA · 색 보정' : '그래픽 향상 끔', 2.5);
+    }
   },
 
   /** 도로는 그대로 두고 교통만 다시 세운다 — 차로 수를 즉시 바꿀 수 있다 */

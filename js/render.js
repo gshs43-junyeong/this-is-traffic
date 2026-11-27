@@ -135,6 +135,7 @@ const Render = {
       this.pGlow = prog(VS, 'precision mediump float;varying vec4 v;varying vec2 w;void main(){float r=length(w);float k=clamp(1.0-r,0.0,1.0);k=k*k*(0.35+0.65*k);gl_FragColor=vec4(v.rgb*v.a*k,v.a*k);}');
     } catch (e) { console.warn('WebGL 셰이더 실패 — 캔버스 2D 로 그린다', e); return false; }
     this.gl = gl;
+    this._prog = prog;
     this.vb = { p: gl.createBuffer(), c: gl.createBuffer(), q: gl.createBuffer() };
     const mk = () => ({ p: new Float32Array(3 * 65536), c: new Uint8Array(4 * 65536), q: null, n: 0 });
     this.bOp = mk(); this.bTr = mk(); this.bMk = mk();
@@ -229,9 +230,165 @@ const Render = {
     V(-1, -1); V(1, -1); V(1, 1); V(-1, -1); V(1, 1); V(-1, 1);
   },
   glBegin() { this.bOp.n = this.bTr.n = this.bMk.n = this.bGl.n = 0; },
+
+  /* =====================================================================
+     그래픽 향상 (셰이더) — 설정에서 켠다. 켜면:
+       1) 불투명 면에 세계 좌표에 고정된 잔결(노면 골재·풀밭 얼룩)을 픽셀 단위로 입힌다.
+          멀수록 옅게 해서 먼 곳이 지글거리지 않는다.
+       2) 장면을 화면 밖 텍스처에 그린 뒤 후처리 한 번으로 하늘과 합성하고
+          FXAA(가장자리 계단 제거) · 블룸(등화·햇빛 번짐) · 색 보정 · 비네트 · 디더를 얹는다.
+     ★ 하늘·원경은 2D 캔버스에 따로 그리므로, 그 캔버스를 매 프레임 텍스처로 올려 같이 합성한다.
+       GL 층만 보정하면 하늘과 땅의 색감이 따로 놀았다.
+     어느 단계든 실패하면 fx 를 끄고 기존 경로로 그린다.
+     ===================================================================== */
+  enhance: false, skyCanvas: null,
+  initFx() {
+    if (this._fxOk !== undefined) return this._fxOk;
+    const gl = this.gl, prog = this._prog;
+    try {
+      const VSW = 'attribute vec3 p;attribute vec4 c;uniform vec2 f;uniform vec2 d;uniform vec3 cR;uniform vec3 cU;uniform vec3 cF;uniform vec3 cM;' +
+        'varying vec4 v;varying vec3 wp;varying float dz;' +
+        'void main(){v=c;wp=cM+cR*p.x+cU*p.y+cF*p.z;dz=p.z;gl_Position=vec4(p.x*f.x,p.y*f.y,d.x*p.z+d.y,p.z);}';
+      const FSW = '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n' +
+        'varying vec4 v;varying vec3 wp;varying float dz;' +
+        // 삼각함수 없는 해시 (Hoskins) — sin 해시는 큰 인자에서 GPU 마다 정밀도가 무너져 줄무늬가 졌다
+        'float h(vec3 i,float P){vec3 q=fract(mod(i,P)*0.1031);q+=dot(q,q.zyx+31.32);return fract((q.x+q.y)*q.z);}' +
+        'float n3(vec3 x,float P){vec3 i=floor(x),t=fract(x);t=t*t*(3.0-2.0*t);' +
+        'return mix(mix(mix(h(i,P),h(i+vec3(1,0,0),P),t.x),mix(h(i+vec3(0,1,0),P),h(i+vec3(1,1,0),P),t.x),t.y),' +
+        'mix(mix(h(i+vec3(0,0,1),P),h(i+vec3(1,0,1),P),t.x),mix(h(i+vec3(0,1,1),P),h(i+vec3(1,1,1),P),t.x),t.y),t.z);}' +
+        'void main(){vec3 col=v.rgb;' +
+        'float big=n3(wp*0.25,64.0)-0.5;' +                       // 4 m 얼룩
+        'float mid=n3(wp*1.0,256.0)-0.5;' +                       // 1 m 결
+        'float g=big*0.12*clamp(1.0-dz/900.0,0.0,1.0)+mid*0.08*clamp(1.0-dz/180.0,0.0,1.0);' +
+        'if(dz<70.0)g+=(n3(wp*4.0,1024.0)-0.5)*0.07*(1.0-dz/70.0);' +   // 25 cm 잔결 — 가까이에서만 계산
+
+        'col*=1.0+g;gl_FragColor=vec4(col*v.a,v.a);}';
+      this.pSolidFx = prog(VSW, FSW);
+      const VQ = 'attribute vec2 a;varying vec2 u;void main(){u=a*0.5+0.5;gl_Position=vec4(a,0.0,1.0);}';
+      const HEAD = 'precision mediump float;varying vec2 u;uniform sampler2D S;uniform sampler2D K;uniform vec2 px;' +
+        'vec3 C(vec2 t){vec4 s=texture2D(S,t);return s.rgb+texture2D(K,vec2(t.x,1.0-t.y)).rgb*(1.0-s.a);}';
+      // 밝은 부분만 걸러 반 해상도로 줄인다 (4 탭 평균)
+      this.pBright = prog(VQ, HEAD + 'uniform float th;void main(){vec3 c=0.25*(C(u+px*vec2(-.5,-.5))+C(u+px*vec2(.5,-.5))+C(u+px*vec2(-.5,.5))+C(u+px*vec2(.5,.5)));' +
+        'float l=max(c.r,max(c.g,c.b));gl_FragColor=vec4(c*smoothstep(th,th+0.12,l),1.0);}');
+      // 분리형 가우시안 (선형 보간을 이용한 5 탭 = 9 탭 상당)
+      this.pBlur = prog(VQ, 'precision mediump float;varying vec2 u;uniform sampler2D S;uniform vec2 dir;void main(){' +
+        'vec3 c=texture2D(S,u).rgb*0.2270270;' +
+        'c+=(texture2D(S,u+dir*1.3846154).rgb+texture2D(S,u-dir*1.3846154).rgb)*0.3162162;' +
+        'c+=(texture2D(S,u+dir*3.2307692).rgb+texture2D(S,u-dir*3.2307692).rgb)*0.0702703;gl_FragColor=vec4(c,1.0);}');
+      // 최종 — FXAA + 블룸 + 색 보정 + 비네트 + 디더
+      this.pFinal = prog(VQ, HEAD + 'uniform sampler2D B;uniform float bs;uniform float sat;uniform float con;' +
+        'vec3 fxaa(){vec3 L=vec3(0.299,0.587,0.114);vec3 nw=C(u+px*vec2(-1,-1)),ne=C(u+px*vec2(1,-1)),sw=C(u+px*vec2(-1,1)),se=C(u+px*vec2(1,1)),m=C(u);' +
+        'float a=dot(nw,L),b=dot(ne,L),c=dot(sw,L),d=dot(se,L),e=dot(m,L);float lo=min(e,min(min(a,b),min(c,d))),hi=max(e,max(max(a,b),max(c,d)));' +
+        'vec2 r=vec2(-((a+b)-(c+d)),(a+c)-(b+d));float rd=max((a+b+c+d)*0.03125,1.0/128.0);float rc=1.0/(min(abs(r.x),abs(r.y))+rd);' +
+        'r=clamp(r*rc,-8.0,8.0)*px;vec3 A=0.5*(C(u+r*(1.0/3.0-0.5))+C(u+r*(2.0/3.0-0.5)));vec3 Bc=A*0.5+0.25*(C(u-r*0.5)+C(u+r*0.5));' +
+        'float lb=dot(Bc,L);return (lb<lo||lb>hi)?A:Bc;}' +
+        'void main(){vec3 c=fxaa();c+=texture2D(B,u).rgb*bs;' +
+        'float l=dot(c,vec3(0.299,0.587,0.114));c=mix(vec3(l),c,sat);' +       // 채도
+        'c=clamp(c,0.0,1.0);c=mix(c,c*c*(3.0-2.0*c),con);' +                   // 대비 S 곡선
+        'vec2 q=u-0.5;c*=1.0-0.30*pow(clamp(length(q)*1.3,0.0,1.0),2.4);' +     // 비네트
+        'c+=(fract(sin(dot(gl_FragCoord.xy,vec2(12.9898,78.233)))*43758.5453)-0.5)/255.0;' +  // 띠 무늬를 깨는 디더
+        'gl_FragColor=vec4(c,1.0);}');
+      this.quadBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      this.skyTex = this._tex();
+      this._fxOk = true;
+    } catch (e) {
+      console.warn('그래픽 향상 셰이더를 쓸 수 없다 — 기본 렌더로 그린다', e);
+      this._fxOk = false;
+    }
+    return this._fxOk;
+  },
+  _tex() {
+    const gl = this.gl, t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  },
+  /** 화면 크기에 맞춘 렌더 타깃 — 장면(깊이 포함) 하나, 블룸용 반 해상도 둘 */
+  _targets(W, H) {
+    const gl = this.gl, T = this.fxT;
+    if (T && T.W === W && T.H === H) return T;
+    if (T) {
+      for (const o of [T.scene, T.a, T.b]) { gl.deleteTexture(o.tex); gl.deleteFramebuffer(o.fb); }
+      gl.deleteRenderbuffer(T.depth);
+    }
+    const mk = (w, h, depth) => {
+      const tex = this._tex();
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      if (depth) gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('framebuffer incomplete');
+      return { tex, fb, w, h };
+    };
+    const depth = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, W, H);
+    const hw = Math.max(1, W >> 1), hh = Math.max(1, H >> 1);
+    this.fxT = { W, H, depth, scene: mk(W, H, depth), a: mk(hw, hh), b: mk(hw, hh) };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return this.fxT;
+  },
+  _quad(prog) {
+    const gl = this.gl;
+    gl.useProgram(prog);
+    const la = prog._la !== undefined ? prog._la : (prog._la = gl.getAttribLocation(prog, 'a'));
+    for (let i = 0; i < 4; i++) gl.disableVertexAttribArray(i);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
+    gl.enableVertexAttribArray(la); gl.vertexAttribPointer(la, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disableVertexAttribArray(la);
+  },
+  _uni(prog, name) { const c = prog._u || (prog._u = {}); return c[name] !== undefined ? c[name] : (c[name] = this.gl.getUniformLocation(prog, name)); },
+  _bind(unit, tex) { const gl = this.gl; gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); },
+  /** 장면 텍스처 + 하늘 캔버스 -> 화면 */
+  postProcess(T) {
+    const gl = this.gl, W = T.W, H = T.H;
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(false);
+    // 하늘 캔버스를 텍스처로
+    this._bind(1, this.skyTex);
+    if (this.skyCanvas) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.skyCanvas);
+    const night = this.pal && this.pal.amb < 0.5, dusk = this.pal && this.pal.amb < 0.9;
+    // 1) 밝은 부분 -> a (반 해상도)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.a.fb); gl.viewport(0, 0, T.a.w, T.a.h);
+    this._bind(0, T.scene.tex); this._bind(1, this.skyTex);
+    let P = this.pBright; gl.useProgram(P);
+    gl.uniform1i(this._uni(P, 'S'), 0); gl.uniform1i(this._uni(P, 'K'), 1);
+    gl.uniform2f(this._uni(P, 'px'), 1 / W, 1 / H);
+    gl.uniform1f(this._uni(P, 'th'), night ? 0.74 : dusk ? 0.82 : 0.92);   // 낮에는 하늘이 밝아 문턱을 높인다
+    this._quad(P);
+    // 2) 가로 흐림 a -> b, 세로 흐림 b -> a
+    P = this.pBlur; gl.useProgram(P); gl.uniform1i(this._uni(P, 'S'), 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.b.fb); this._bind(0, T.a.tex);
+    gl.uniform2f(this._uni(P, 'dir'), 1.6 / T.a.w, 0); this._quad(P);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.a.fb); this._bind(0, T.b.tex);
+    gl.uniform2f(this._uni(P, 'dir'), 0, 1.6 / T.a.h); this._quad(P);
+    // 3) 최종 합성 -> 화면
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H);
+    P = this.pFinal; gl.useProgram(P);
+    this._bind(0, T.scene.tex); this._bind(1, this.skyTex); this._bind(2, T.a.tex);
+    gl.uniform1i(this._uni(P, 'S'), 0); gl.uniform1i(this._uni(P, 'K'), 1); gl.uniform1i(this._uni(P, 'B'), 2);
+    gl.uniform2f(this._uni(P, 'px'), 1 / W, 1 / H);
+    gl.uniform1f(this._uni(P, 'bs'), night ? 1.0 : dusk ? 0.55 : 0.22);
+    gl.uniform1f(this._uni(P, 'sat'), night ? 1.05 : 1.14);
+    gl.uniform1f(this._uni(P, 'con'), 0.22);
+    this._quad(P);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.depthMask(true);
+  },
   glFlush() {
     const gl = this.gl; if (!gl) return;
     const W = gl.canvas.width, H = gl.canvas.height;
+    let T = null;
+    if (this.enhance && this.initFx()) {
+      try { T = this._targets(W, H); } catch (e) { console.warn('그래픽 향상 끔 —', e); this._fxOk = false; T = null; }
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T ? T.scene.fb : null);
     gl.viewport(0, 0, W, H);
     gl.clearColor(0, 0, 0, 0); gl.clearDepth(1);
     gl.depthMask(true);
@@ -243,6 +400,15 @@ const Render = {
     const draw = (prog, b, withQ) => {
       if (!b.n) return;
       gl.useProgram(prog);
+      if (prog === this.pSolidFx) {
+        // 카메라 축과, 256 m 로 접은 카메라 위치 — 잡결은 세계에 붙고 float 정밀도도 지킨다
+        const U = (k) => this._uni(prog, k);
+        gl.uniform3f(U('cR'), this.rx, this.ry, this.rz);
+        gl.uniform3f(U('cU'), this.ux, this.uy, this.uz);
+        gl.uniform3f(U('cF'), this.fx, this.fy, this.fz);
+        const m = (x) => x - Math.floor(x / 256) * 256;
+        gl.uniform3f(U('cM'), m(this.cx), m(this.cy), m(this.cz));
+      }
       const L = prog._loc || (prog._loc = {          // 위치는 프로그램마다 한 번만 찾는다
         f: gl.getUniformLocation(prog, 'f'), d: gl.getUniformLocation(prog, 'd'),
         p: gl.getAttribLocation(prog, 'p'), c: gl.getAttribLocation(prog, 'c'), q: gl.getAttribLocation(prog, 'q'),
@@ -263,7 +429,7 @@ const Render = {
       gl.drawArrays(gl.TRIANGLES, 0, b.n);
     };
     gl.disable(gl.BLEND);
-    draw(this.pSolid, this.bOp, false);
+    draw(T ? this.pSolidFx : this.pSolid, this.bOp, false);
     draw(this.pSolid, this.bMk, false);
     // 반투명(그림자) — 불투명 위에 순서대로, 깊이는 쓰지 않는다
     gl.enable(gl.BLEND); gl.depthMask(false);
@@ -273,6 +439,7 @@ const Render = {
     gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ONE, gl.ONE);
     draw(this.pGlow, this.bGl, true);
     gl.depthMask(true); gl.disable(gl.BLEND);
+    if (T) this.postProcess(T);
   },
   /** 한 점의 화면 좌표 (뒤쪽이면 null) */
   point(x, y, z) {
