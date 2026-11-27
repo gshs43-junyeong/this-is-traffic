@@ -239,6 +239,11 @@ const Render = {
    * 같은 key 의 그림은 한 번만 만들어 올린다. GL 이면 깊이 판정을 받고, 아니면 2D 로 비스듬히 그린다(가림 없음).
    */
   texQuad(key, make, P, bright) {
+    /* ★ 뒤에서는 그리지 않는다 — 뒷판이 글씨 바로 뒤에 있어 먼 거리에서는 깊이가 겹쳐 글씨가 비쳤다.
+       앞면 법선 = (왼아래→오른아래) × (왼아래→왼위) — 판을 마주 보는 쪽을 가리킨다 */
+    const ax = P[1][0] - P[0][0], ay = P[1][1] - P[0][1], az = P[1][2] - P[0][2];
+    const bx = P[3][0] - P[0][0], by = P[3][1] - P[0][1], bz = P[3][2] - P[0][2];
+    if ((ay * bz - az * by) * (this.cx - P[0][0]) + (az * bx - ax * bz) * (this.cy - P[0][1]) + (ax * by - ay * bx) * (this.cz - P[0][2]) <= 0) return;
     if (!this.gl) return this.texQuad2D(key, make, P);
     const gl = this.gl;
     let T = this.texCache.get(key);
@@ -273,6 +278,11 @@ const Render = {
       Q.q[j * 2] = UV[i][0]; Q.q[j * 2 + 1] = UV[i][1];
     }
     Q.k = bright == null ? 1 : bright;
+  },
+  /** 그림 붙인 사각형의 그림을 모두 버린다 — 글꼴이 늦게 읽히면 다시 그리게 */
+  texDrop() {
+    if (this.gl && this.texCache) for (const o of this.texCache.values()) if (o.tex) this.gl.deleteTexture(o.tex);
+    if (this.texCache) this.texCache.clear(); if (this.texQ) this.texQ.clear();
   },
   /** 2D 캔버스로 — 세 꼭짓점으로 맞춘 아핀 변환 (원근은 근사) */
   texQuad2D(key, make, P) {

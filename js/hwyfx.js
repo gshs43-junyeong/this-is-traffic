@@ -2,13 +2,13 @@
    hwyfx.js — 고속도로 시설의 생김새: 도로 표지판 · 휴게소 · 영업소(요금소) · 분기점 연결로
 
    표지판 (한국 고속도로 안내표지와 비슷하게 — 녹색 바탕에 흰 글씨, 휴게소는 청색 바탕)
-     나들목(IC)   2 km · 1 km · 500 m 예고(길가) — 출구 번호 · IC 이름(한글 · 로마자) · 갈 곳 둘 · 거리,
-                 감속차로 시작에 외팔 표지(출구 차로 위, ↘), 갈림목 코에 '출구 ↗'.
-     분기점(JCT)  예고에 고속도로 노선 번호 방패(위 빨강 · 아래 파랑)와 '분기점 JCT', 1 km 와 감속차로 시작은
-                 차로 전체를 건너는 문형 표지 — 왼쪽 판은 본선(노선 방패 · 갈 곳 · 차로마다 ↓),
-                 오른쪽 판은 갈라지는 노선(방패 · 갈 곳 · ↘).
-     휴게소       청색 바탕, 시설 그림(주유 · 식당 · 화장실 · 주차) · 거리, 2 km 표지 밑에 '다음 휴게소 ○○ km',
-                 감속차로 시작에 '휴게소 ↘'.
+     놓는 자리   출구(감속차로 시작)까지 2 km · 1 km 는 차로 위 문형 표지, 500 m · 0 m 는 갓길 밖 높은 기둥 표지,
+                 갈림목 코에 작은 분류 표지.
+     나들목(IC)   본판 — 왼쪽 일반국도 번호(파란 타원), 갈 곳 둘(한글 크게 · 로마자 옆), 오른쪽 ↗ (예고는 ↗ 와 거리).
+                 본판 위 오른쪽에 붙은 출구 꼬리표 — 검은 칸의 출구 번호 · IC 이름 · 나가는 차로 그림.
+     분기점(JCT)  본판의 번호가 고속국도 방패(위 빨강 · 아래 파랑), 꼬리표 이름은 '○○JC'.
+                 2 km · 1 km 문형 표지는 판 둘 — 왼쪽 본선(방패 · 갈 곳 · 차로마다 ↓), 오른쪽 갈라지는 노선.
+     휴게소       청색 바탕, 시설 그림(주유 · 식당 · 화장실 · 주차), 출구 번호 없음, 2 km 표지 밑에 '다음 휴게소 ○○ km'.
    시설 (나들목 고리 — 감속차로에서 나간 램프와 다시 들어오는 램프가 바깥 접속점에서 만난다)
      나들목  바깥 접속점에 영업소(지붕 · 부스) 와 바깥으로 나가는 지방도.
      분기점  바깥 접속점에서 고가 연결로가 다른 고속도로로 휘어 올라간다.
@@ -25,9 +25,11 @@ const ROMAN = {
   상주: 'Sangju', 해평: 'Haepyeong', 월성: 'Wolseong', 남원: 'Namwon', 동곡: 'Donggok', 오현: 'Ohyeon', 삼포: 'Sampo',
   연화: 'Yeonhwa', 무흘: 'Muheul', 장현: 'Janghyeon', 초계: 'Chogye',
 };
+const MAIN_AR = 1024 / 440, TAB_AR = 1024 / 280, PLATE_AR = 1024 / 156;   // 본판 · 꼬리표 · 보조판 가로세로비
 const SIGN = {
   green: '#0f6a3e', blue: '#1150a8', white: '#f4f6f2', steel: '#8b9298', back: '#7c8287',
-  font: '"Pretendard","Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif',
+  // 로마자 · 숫자는 SignLatin, 그 글꼴에 없는 한글은 SignHangul 로 넘어간다 (index.html @font-face)
+  font: 'SignLatin,SignHangul,"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif',
   routes: [10, 12, 15, 16, 25, 27, 30, 35, 40, 45, 50, 55, 60, 65],
 };
 
@@ -35,6 +37,7 @@ const HwyFx = {
   /* ---------- 자리 계산 ---------- */
   prepare(road, corrA, corrB) {
     this.road = road; this.cA = corrA; this.cB = corrB;
+    this.loadFonts();
     const h = (str) => { let x = 2166136261; for (const c of String(str)) x = Math.imul(x ^ c.charCodeAt(0), 16777619); return x >>> 0; };
     this.mainRoute = SIGN.routes[h('main' + road.seed) % SIGN.routes.length];
     // 출구 번호 — 노선 시작부터 나들목 · 분기점에만 차례로 (휴게소는 번호가 없다)
@@ -46,7 +49,7 @@ const HwyFx = {
       const base = ic.name.replace(/(제\d+)?(IC|분기점|휴게소)$/, '');
       const pick = (salt) => { const c = PLACE.filter((p) => p !== base); return c[h(ic.name + salt) % c.length]; };
       let route = SIGN.routes[h(ic.name) % SIGN.routes.length]; if (route === this.mainRoute) route = SIGN.routes[(SIGN.routes.indexOf(route) + 3) % SIGN.routes.length];
-      this.info.set(ic.name, { type, base, no: type === 'rest' ? null : ++k, dest: [pick('a'), pick('b')], route, otherDest: [pick('c'), pick('d')] });
+      this.info.set(ic.name, { type, base, no: type === 'rest' ? null : ++k, dest: [pick('a'), pick('b')], route, nat: 1 + h(ic.name + 'n') % 79, otherDest: [pick('c'), pick('d')] });
     }
     // 방향마다 본선 끝 갈 곳
     this.dirDest = { 1: PLACE[h('end1' + road.seed) % PLACE.length], [-1]: PLACE[h('end2' + road.seed) % PLACE.length] };
@@ -65,6 +68,13 @@ const HwyFx = {
       });
     }
     this.levelPads();
+  },
+  /* ★ 캔버스는 아직 안 읽힌 웹 글꼴을 기다려 주지 않고 대체 글꼴로 그린다 — 그 그림이 텍스처로 굳으므로
+     글꼴이 다 읽히면 그림을 버려 다시 그리게 한다 */
+  loadFonts() {
+    if (this._fontP || typeof document === 'undefined' || !document.fonts) return;
+    this._fontP = Promise.all([document.fonts.load('800 40px SignHangul', '가나'), document.fonts.load('800 40px SignLatin', 'Ab1')])
+      .then(() => Render.texDrop()).catch(() => {});
   },
   /** 그리기 전에 — 도로 · 방향이 바뀌었으면 다시 잰다 (지형 고르기는 본선 띠를 그리기 전에 있어야 한다) */
   sync(sc) { if (this.road !== sc.road || this.cA !== sc.corrA || this.cB !== sc.corrB) this.prepare(sc.road, sc.corrA, sc.corrB); },
@@ -132,73 +142,83 @@ const HwyFx = {
   /* ----- 표지판 ----- */
   signs(site, t) {
     const corr = site.corr, S = site.s, inf = site.inf, ex = S - 320;     // 감속차로 시작 = 출구
-    for (const D of [2000, 1000, 500]) {
+    for (const D of [2000, 1000, 500, 0]) {
       const s = ex - D;
       if (s < site.prevEnd || s < 60 || this.inTunnel(corr, s)) continue;
-      const dist = D >= 1000 ? D / 1000 + 'km' : D + 'm';
-      if (t === 'jct' && D === 1000) { this.gantry(site, s, dist); continue; }
-      const key = `${t}:${site.name}:${dist}:${corr.dir}`;
-      const make = () => (t === 'rest' ? this.texRest(site, dist) : t === 'jct' ? this.texJct(site, dist) : this.texIC(site, dist));
-      const d = this.sideSign(corr, s, key, make, 6.2, 3.1);
-      if (d >= 0 && t === 'rest' && D === 2000 && site.nextRest != null) {
-        this.panel(corr, s, this.edgeU(corr, s) + 3.6, 1.15, 6.2, 0.95, `restnext:${site.nextRest}`, () => this.texNextRest(site.nextRest), d);
-      }
+      const dist = D >= 1000 ? D / 1000 + 'km' : D ? D + 'm' : null;
+      if (D < 1000) this.roadside(site, s, dist);
+      else if (t === 'jct') this.gantry(site, s, dist);
+      else this.overhead(site, s, dist, t === 'rest' && D === 2000 ? site.nextRest : null);
     }
-    // 출구 — 감속차로 시작
-    if (!this.inTunnel(corr, ex)) {
-      if (t === 'jct') this.gantry(site, ex, null);
-      else this.cantilever(corr, ex, `${t}x:${site.name}:${corr.dir}`, () => (t === 'rest' ? this.texRestExit(site) : this.texICExit(site)), 6.4, 3.0);
-    }
-    // 갈림목 코 — 램프가 본선에서 4 m 넘게 벌어진 곳
+    // 갈림목 코 — 램프가 본선에서 4.5 m 넘게 벌어진 곳
     let tg = 60;
     for (; tg < 300; tg += 5) if (corr.rampLat(tg) - corr.rampHalf(tg) - (RoadStd.shL + RoadStd.laneW * corr.nLane + RoadStd.shR * 0.5) > 4.5) break;
     const ug = (corr.rampLat(tg) - corr.rampHalf(tg) + RoadStd.shL + RoadStd.laneW * corr.nLane) / 2 + 1.2;
     const d = this.near(corr, S + tg, 1400);
     if (d >= 0) {
-      const key = `${t}g:${t === 'jct' ? inf.route : ''}:${corr.dir}`;
+      const key = `${t}g:${t === 'jct' ? inf.route : ''}`;
       const make = () => (t === 'rest' ? this.texGore('휴게소', SIGN.blue) : t === 'jct' ? this.texGoreJct(inf) : this.texGore('출구', SIGN.green));
-      this.posts(corr, S + tg, [ug - 0.7, ug + 0.7], 1.0 + 1.6, 0.12, d);
-      this.panel(corr, S + tg, ug, 1.0, 2.4, 1.6, key, make, d);
+      this.posts(corr, S + tg + 0.3, [ug - 0.8, ug + 0.8], 1.0 + 2.0, 0.12, d);
+      this.panel(corr, S + tg, ug, 1.0, 3.0, 2.0, key, make, d);
     }
   },
-  /** 길가 표지 — 기둥 둘 위의 판 (판 아래 2.2 m) */
-  sideSign(corr, s, key, make, W, H) {
-    const d = this.near(corr, s); if (d < 0) return -1;
-    const uc = this.edgeU(corr, s) + 3.6, hb = 2.2;
-    this.posts(corr, s, [uc - W * 0.3, uc + W * 0.3], hb + H, 0.16, d);
-    this.panel(corr, s, uc, hb, W, H, key, make, d);
-    return d;
+  /** 본판 열쇠 · 그림 */
+  mainKey(site, dist) { return `${site.inf.type}m:${site.name}:${dist || '0'}`; },
+  /** 출구 꼬리표 — 본판 위, 오른쪽 끝(uR)에 맞춰 붙인다 */
+  tab(site, s, uR, zb, h, d) {
+    const W = h * TAB_AR;
+    this.panel(site.corr, s, uR - W / 2, zb, W, h, `tab:${site.name}`, () => this.texTab(site), d);
   },
-  /** 외팔 표지 — 갓길 밖 기둥에서 팔을 뻗어 바깥 차로 위에 판 (아래 5.5 m) */
-  cantilever(corr, s, key, make, W, H) {
-    const d = this.near(corr, s); if (d < 0) return;
-    const pu = this.edgeU(corr, s) + 1.6, uc = RoadStd.shL + RoadStd.laneW * (corr.nLane - 0.5) + 0.6, hb = 5.6;
-    this.posts(corr, s + 0.4, [pu], hb + H + 0.3, 0.32, d);
-    this.beam(corr, s + 0.4, uc - W / 2 - 0.2, pu, hb + H * 0.72, 0.28, d);
-    this.beam(corr, s + 0.4, uc - W / 2 - 0.2, pu, hb + H * 0.25, 0.22, d);
-    this.panel(corr, s, uc, hb, W, H, key, make, d);
+  /** 차로 위 문형 표지 (나들목 · 휴게소) — 본선 가운데에 본판, 위에 꼬리표, 밑에 보조판 */
+  overhead(site, s, dist, nextKm) {
+    const corr = site.corr, d = this.near(corr, s); if (d < 0) return;
+    const t = site.inf.type, n = corr.nLane, lw = RoadStd.laneW, sl = RoadStd.shL;
+    const pr = this.edgeU(corr, s) + 1.6, pl = -0.25, hb = 5.6;
+    const W = Math.min(lw * n - 0.6, 9.4), H = W / MAIN_AR, uc = sl + lw * n / 2;
+    const plate = nextKm != null ? W / PLATE_AR : 0, tabH = t === 'rest' ? 0 : H * 0.3;
+    const zb = hb + plate;
+    this.posts(corr, s + 0.5, [pl, pr], zb + H + tabH + 0.2, 0.34, d);
+    this.beam(corr, s + 0.5, pl, pr, zb + H * 0.75, 0.32, d);
+    this.beam(corr, s + 0.5, pl, pr, zb + H * 0.2, 0.26, d);
+    if (plate) this.panel(corr, s, uc, hb, W, plate, `restnext:${nextKm}`, () => this.texNextRest(nextKm), d);
+    this.panel(corr, s, uc, zb, W, H, this.mainKey(site, dist), () => this.texMain(site, dist), d);
+    if (tabH) this.tab(site, s, uc + W / 2, zb + H + 0.06, tabH, d);
+  },
+  /** 갓길 밖 높은 기둥 표지 (500 m · 0 m) — 기둥은 판 뒤에 선다 */
+  roadside(site, s, dist) {
+    const corr = site.corr, d = this.near(corr, s); if (d < 0) return;
+    const t = site.inf.type, W = 6.0, H = W / MAIN_AR, tabH = t === 'rest' ? 0 : H * 0.3;
+    const uc = this.edgeU(corr, s) + 3.6, hb = 5.2;          // 높은 봉 — 판 아래가 차 지붕보다 한참 위
+    // ★ 기둥을 판과 같은 자리(s)에 세우면 판 앞으로 반쯤 튀어나와 글씨 위에 철봉이 보인다 — 뒤로 물린다
+    this.posts(corr, s + 0.38, [uc - W * 0.3], hb + H - 0.1, 0.26, d);
+    this.posts(corr, s + 0.38, [uc + W * 0.3], hb + H + tabH - 0.1, 0.26, d);
+    this.beam(corr, s + 0.38, uc - W * 0.3, uc + W * 0.3, hb + H * 0.25, 0.16, d);
+    this.beam(corr, s + 0.38, uc - W * 0.3, uc + W * 0.3, hb + H * 0.75, 0.16, d);
+    this.panel(corr, s, uc, hb, W, H, this.mainKey(site, dist), () => this.texMain(site, dist), d);
+    if (tabH) this.tab(site, s, uc + W / 2, hb + H + 0.05, tabH, d);
   },
   /** 분기점 문형 표지 — 중앙분리대 쪽과 갓길 밖 기둥 · 가로보 · 판 둘 (본선 · 갈라지는 길) */
   gantry(site, s, dist) {
     const corr = site.corr, d = this.near(corr, s); if (d < 0) return;
-    const pr = this.edgeU(corr, s) + 1.6, pl = -0.25, hb = 5.6, H = 3.2;
+    const pr = this.edgeU(corr, s) + 1.6, pl = -0.25, hb = 5.6, H = 3.4, tabH = H * 0.3;
     const n = corr.nLane, lw = RoadStd.laneW, sl = RoadStd.shL;
-    this.posts(corr, s + 0.5, [pl, pr], hb + H + 0.4, 0.34, d);
+    this.posts(corr, s + 0.5, [pl, pr], hb + H + tabH + 0.2, 0.34, d);
     this.beam(corr, s + 0.5, pl, pr, hb + H * 0.75, 0.32, d);
     this.beam(corr, s + 0.5, pl, pr, hb + H * 0.2, 0.26, d);
     // 왼쪽 판 — 본선 차로들 위 (바깥 한 차로를 뺀 폭)
     const wL = lw * (n - 1) + 0.6, cL = sl + lw * (n - 1) / 2;
     const tag = dist || 'x';
     this.panel(corr, s, cL, hb, wL, H, `jctm:${site.name}:${tag}:${corr.dir}:${n}`, () => this.texJctMain(site, n - 1, dist, wL / H), d);
-    // 오른쪽 판 — 바깥 차로(나가는 쪽) 위
+    // 오른쪽 판 — 바깥 차로(나가는 쪽) 위, 그 위에 출구 꼬리표
     const wR = lw + 1.6, cR = sl + lw * (n - 0.5) + 0.8;
-    this.panel(corr, s, cR, hb, wR, H, `jcto:${site.name}:${tag}:${corr.dir}`, () => this.texJctOut(site, dist, wR / H), d);
+    this.panel(corr, s, cR, hb, wR, H, `jcto:${site.name}:${tag}`, () => this.texJctOut(site, dist, wR / H), d);
+    this.tab(site, s, cR + wR / 2, hb + H + 0.06, tabH, d);
   },
   panel(corr, s, uc, hb, W, H, key, make, dist) {
     const P = [this.P(corr, s, uc - W / 2, hb), this.P(corr, s, uc + W / 2, hb), this.P(corr, s, uc + W / 2, hb + H), this.P(corr, s, uc - W / 2, hb + H)];
     Render.texQuad(key, make, P, this.bright);
     // 뒷면 · 테두리 두께
-    const Q = [this.P(corr, s + 0.14, uc - W / 2, hb), this.P(corr, s + 0.14, uc + W / 2, hb), this.P(corr, s + 0.14, uc + W / 2, hb + H), this.P(corr, s + 0.14, uc - W / 2, hb + H)];
+    const Q = [this.P(corr, s + 0.12, uc - W / 2, hb), this.P(corr, s + 0.12, uc + W / 2, hb), this.P(corr, s + 0.12, uc + W / 2, hb + H), this.P(corr, s + 0.12, uc - W / 2, hb + H)];
     const back = Scene.haze(SIGN.back, dist);
     Scene.quad(Q[0], Q[1], Q[2], Q[3], back);
     Scene.quad(P[0], P[1], Q[1], Q[0], back); Scene.quad(P[3], P[2], Q[2], Q[3], back);
@@ -376,86 +396,98 @@ const HwyFx = {
     g.fillText(String(no), 0, h * 0.12);
     g.restore(); g.textBaseline = 'alphabetic';
   },
-  exitTab(g, no, x, y, h) {
-    // 출구 번호 — 흰 테두리 안의 번호와 '출구'
-    g.font = `800 ${h * 0.62}px ${SIGN.font}`;
-    const w = Math.max(h * 2.3, g.measureText(String(no)).width + h * 1.6);
-    g.fillStyle = SIGN.white; g.fillRect(x, y, w, h);
-    g.fillStyle = SIGN.green; g.fillRect(x + h * 0.08, y + h * 0.08, w - h * 0.16, h - h * 0.16);
-    g.fillStyle = SIGN.white; g.textAlign = 'left';
-    g.font = `800 ${h * 0.4}px ${SIGN.font}`; g.fillText('출구', x + h * 0.2, y + h * 0.66);
-    g.font = `800 ${h * 0.62}px ${SIGN.font}`; g.textAlign = 'right'; g.fillText(String(no), x + w - h * 0.18, y + h * 0.78);
-    return w;
+  /** 글씨를 maxW 안에 맞춘다 (넘치면 줄인다) — 그린 폭을 돌려준다 */
+  fit(g, str, x, y, px, maxW, weight, align) {
+    g.font = `${weight || 800} ${px}px ${SIGN.font}`;
+    const w = g.measureText(str).width;
+    if (w > maxW) { px *= maxW / w; }
+    return this.text(g, str, x, y, px, weight, align);
   },
-  texIC(site, dist) {
-    const { cv, g } = this.canvas(1024, 512, SIGN.green), inf = site.inf;
-    this.exitTab(g, inf.no, 48, 40, 78);
-    // IC 이름 + 'IC' 상자 · 로마자
-    const w = this.text(g, inf.base, 60, 220, 120);
-    g.fillStyle = SIGN.white; g.fillRect(84 + w, 128, 104, 82); g.fillStyle = SIGN.green; this.text(g, 'IC', 84 + w + 52, 196, 66, 900, 'center'); g.fillStyle = SIGN.white;
-    this.text(g, this.roman(inf.base) + ' IC', 62, 268, 40, 600);
-    // 갈 곳 둘 (한글 · 로마자)
-    this.text(g, inf.dest.join('  ·  '), 62, 380, 76);
-    this.text(g, inf.dest.map((p) => this.roman(p)).join(' · '), 64, 428, 34, 600);
-    // 거리 · 출구 표시
-    this.text(g, dist, 970, 456, 104, 900, 'right');
-    this.arrow(g, 900, 230, 150, Math.PI / 4, 30);
+  /** 일반국도 번호 — 파란 타원 · 흰 테 · 흰 숫자 */
+  natShield(g, x, y, rx, ry, no) {
+    g.save();
+    g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.fillStyle = SIGN.white; g.fill();
+    g.beginPath(); g.ellipse(x, y, rx * 0.9, ry * 0.86, 0, 0, TAU); g.fillStyle = '#1d3ccf'; g.fill();
+    g.fillStyle = SIGN.white; g.font = `800 ${ry * (no >= 10 ? 1.2 : 1.35)}px ${SIGN.font}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(no), x, y + ry * 0.06);
+    g.restore(); g.textBaseline = 'alphabetic';
+  },
+  /** 나가는 차로 그림 — 좁아지는 차로 둘과 오른쪽으로 갈라지는 화살표 */
+  exitPicto(g, x, y, w, h) {
+    g.save(); g.fillStyle = SIGN.white; g.strokeStyle = SIGN.white;
+    g.beginPath(); g.moveTo(x, y + h); g.lineTo(x + w * 0.24, y + h); g.lineTo(x + w * 0.34, y); g.lineTo(x + w * 0.22, y); g.closePath(); g.fill();
+    g.beginPath(); g.moveTo(x + w * 0.42, y + h); g.lineTo(x + w * 0.58, y + h); g.lineTo(x + w * 0.56, y + h * 0.5); g.lineTo(x + w * 0.47, y + h * 0.5); g.closePath(); g.fill();
+    g.lineWidth = w * 0.13; g.lineCap = 'butt';
+    g.beginPath(); g.moveTo(x + w * 0.515, y + h * 0.56); g.quadraticCurveTo(x + w * 0.56, y + h * 0.22, x + w * 0.8, y + h * 0.2); g.stroke();
+    g.beginPath(); g.moveTo(x + w, y + h * 0.18); g.lineTo(x + w * 0.74, y - h * 0.04); g.lineTo(x + w * 0.76, y + h * 0.44); g.closePath(); g.fill();
+    g.restore();
+  },
+  /** 출구 꼬리표 — 검은 칸의 출구 번호 · 이름 · 나가는 차로 그림 */
+  texTab(site) {
+    const W = 1024, H = 280, inf = site.inf, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d'), m = 10, r = 26;
+    const rr = (x, y, w, h, rad) => { g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, rad) : g.rect(x, y, w, h); };
+    g.fillStyle = SIGN.green; g.fillRect(0, 0, W, H);
+    g.font = `800 172px ${SIGN.font}`;
+    const wN = Math.max(250, g.measureText(String(inf.no)).width + 80);
+    g.fillStyle = '#000'; rr(m + 12, m + 12, wN, H - 2 * (m + 12), r * 0.6); g.fill();
+    g.fillStyle = SIGN.white; this.text(g, String(inf.no), m + 12 + wN / 2, H * 0.73, 172, 800, 'center');
+    g.strokeStyle = SIGN.white; g.lineWidth = 12; rr(m, m, W - 2 * m, H - 2 * m, r); g.stroke();
+    g.fillStyle = SIGN.white;
+    this.fit(g, inf.base + (inf.type === 'jct' ? 'JC' : ''), m + wN + 60, H * 0.72, 160, W - wN - 330, 800);
+    this.exitPicto(g, W - 230, 52, 180, 176);
     return cv;
   },
-  texICExit(site) {
-    const { cv, g } = this.canvas(1024, 480, SIGN.green), inf = site.inf;
-    this.exitTab(g, inf.no, 48, 40, 76);
-    const w = this.text(g, inf.base, 60, 230, 120);
-    g.fillStyle = SIGN.white; g.fillRect(84 + w, 138, 104, 82); g.fillStyle = SIGN.green; this.text(g, 'IC', 84 + w + 52, 206, 66, 900, 'center'); g.fillStyle = SIGN.white;
-    this.text(g, inf.dest.join('  ·  '), 62, 340, 72);
-    this.text(g, '출구  EXIT', 62, 430, 58, 800);
-    this.arrow(g, 890, 300, 220, Math.PI * 3 / 4, 40);
-    return cv;
-  },
-  texJct(site, dist) {
-    const { cv, g } = this.canvas(1024, 512, SIGN.green), inf = site.inf;
-    this.exitTab(g, inf.no, 48, 40, 78);
-    this.shield(g, 120, 260, 120, inf.route);
-    this.text(g, inf.base + '분기점', 210, 250, 104);
-    this.text(g, this.roman(inf.base) + ' JCT', 212, 300, 40, 600);
-    this.text(g, inf.otherDest.join(' · ') + ' 방면', 62, 410, 64);
-    this.text(g, dist, 970, 460, 104, 900, 'right');
+  /** 본판 — 나들목 · 분기점 (휴게소는 texRest). dist 가 없으면 출구 자리 표지(↗ 만) */
+  texMain(site, dist) {
+    const inf = site.inf, t = inf.type;
+    if (t === 'rest') return this.texRest(site, dist);
+    const { cv, g } = this.canvas(1024, 440, SIGN.green);
+    if (t === 'jct') this.shield(g, 128, 220, 160, inf.route);
+    else this.natShield(g, 128, 220, 88, 66, inf.nat);
+    const dests = t === 'jct' ? inf.otherDest : [inf.base, inf.dest[0]];
+    const x0 = 238, xR = 815;
+    dests.forEach((p, i) => {
+      const y = i ? 375 : 195;
+      const w = this.fit(g, p, x0, y, 118, 280, 800);
+      this.fit(g, this.roman(p), x0 + w + 20, y - 6, 56, xR - (x0 + w + 20), 700);
+    });
+    if (dist) { this.arrow(g, 912, 150, 180, Math.PI / 4, 48); this.fit(g, dist, 912, 392, 84, 160, 800, 'center'); }
+    else this.arrow(g, 895, 225, 270, Math.PI / 4, 66);
     return cv;
   },
   /** 분기점 문형 표지 왼쪽 판 — 본선 (방패 · 갈 곳 · 차로마다 ↓) */
   texJctMain(site, nLanes, dist, aspect) {
     const W = 1024, H = Math.round(W / aspect / 2) * 2, { cv, g } = this.canvas(W, Math.min(1024, H), SIGN.green);
     const h = cv.height, dest = this.dirDest[site.corr.dir];
-    this.shield(g, 110, h * 0.28, h * 0.3, this.mainRoute);
-    this.text(g, dest, 200, h * 0.33, h * 0.2);
-    this.text(g, this.roman(dest), 202, h * 0.45, h * 0.08, 600);
-    if (dist) this.text(g, dist, W - 50, h * 0.33, h * 0.16, 900, 'right');
+    this.shield(g, 120, h * 0.27, h * 0.34, this.mainRoute);
+    const w = this.fit(g, dest, 230, h * 0.36, h * 0.245, W * 0.45, 800);
+    this.fit(g, this.roman(dest), 250 + w, h * 0.35, h * 0.1, W * 0.3, 700);
+    if (dist) this.text(g, dist, W - 50, h * 0.35, h * 0.18, 800, 'right');
     for (let i = 0; i < nLanes; i++) this.arrow(g, W * (i + 0.5) / nLanes, h * 0.75, h * 0.32, Math.PI, h * 0.05);
     return cv;
   },
   /** 분기점 문형 표지 오른쪽 판 — 갈라지는 노선 (방패 · 갈 곳 · ↘) */
   texJctOut(site, dist, aspect) {
     const W = 512, { cv, g } = this.canvas(W, Math.min(1024, Math.round(W / aspect)), SIGN.green), inf = site.inf, h = cv.height;
-    this.shield(g, W * 0.28, h * 0.2, h * 0.24, inf.route);
-    this.text(g, inf.base, W * 0.5, h * 0.24, h * 0.13);
-    this.text(g, 'JCT', W * 0.52, h * 0.32, h * 0.06, 700);
-    this.text(g, inf.otherDest[0], W / 2, h * 0.5, h * 0.12, 800, 'center');
-    this.text(g, inf.otherDest[1], W / 2, h * 0.63, h * 0.12, 800, 'center');
-    if (dist) this.text(g, dist, W / 2, h * 0.92, h * 0.1, 900, 'center');
-    else this.arrow(g, W / 2, h * 0.82, h * 0.22, Math.PI * 3 / 4, h * 0.045);
+    this.shield(g, W / 2, h * 0.19, h * 0.26, inf.route);
+    this.fit(g, inf.otherDest[0], W / 2, h * 0.5, h * 0.145, W * 0.86, 800, 'center');
+    this.fit(g, inf.otherDest[1], W / 2, h * 0.67, h * 0.145, W * 0.86, 800, 'center');
+    if (dist) this.text(g, dist, W / 2, h * 0.93, h * 0.14, 800, 'center');
+    else this.arrow(g, W / 2, h * 0.84, h * 0.22, Math.PI / 4, h * 0.05);
     return cv;
   },
   texGore(word, bg) {
     const { cv, g } = this.canvas(512, 340, bg);
-    this.text(g, word, 256, 150, 110, 900, 'center');
-    this.arrow(g, 256, 250, 120, Math.PI / 4, 26);
+    this.fit(g, word, 256, 160, 136, 440, 900, 'center');
+    this.arrow(g, 256, 262, 130, Math.PI / 4, 32);
     return cv;
   },
   texGoreJct(inf) {
     const { cv, g } = this.canvas(512, 340, SIGN.green);
-    this.shield(g, 150, 150, 120, inf.route);
-    this.text(g, inf.otherDest[0], 330, 175, 70, 900, 'center');
-    this.arrow(g, 256, 270, 100, Math.PI / 4, 22);
+    this.shield(g, 130, 150, 150, inf.route);
+    this.fit(g, inf.otherDest[0], 360, 182, 100, 230, 900, 'center');
+    this.arrow(g, 256, 280, 100, Math.PI / 4, 26);
     return cv;
   },
   /** 휴게소 시설 그림 — 흰 칸 안에 청색 그림 */
@@ -473,20 +505,14 @@ const HwyFx = {
     });
     g.fillStyle = SIGN.white;
   },
+  /** 휴게소 본판 — dist 가 없으면 출구 자리 표지(↗ 만) */
   texRest(site, dist) {
-    const { cv, g } = this.canvas(1024, 512, SIGN.blue), inf = site.inf;
-    this.text(g, inf.base + '휴게소', 60, 150, 110);
-    this.text(g, this.roman(inf.base) + ' Service Area', 62, 205, 40, 600);
-    this.pictos(g, 60, 260, 150);
-    this.text(g, dist, 970, 460, 104, 900, 'right');
-    return cv;
-  },
-  texRestExit(site) {
-    const { cv, g } = this.canvas(1024, 480, SIGN.blue), inf = site.inf;
-    this.text(g, inf.base + '휴게소', 60, 160, 112);
-    this.text(g, 'Service Area', 62, 215, 42, 600);
-    this.pictos(g, 60, 270, 130);
-    this.arrow(g, 890, 300, 220, Math.PI * 3 / 4, 40);
+    const { cv, g } = this.canvas(1024, 440, SIGN.blue), inf = site.inf;
+    this.fit(g, inf.base + '휴게소', 60, 160, 136, 720, 800);
+    this.fit(g, this.roman(inf.base) + ' Service Area', 64, 228, 52, 720, 700);
+    this.pictos(g, 60, 262, 140);
+    if (dist) { this.arrow(g, 912, 150, 180, Math.PI / 4, 48); this.fit(g, dist, 912, 392, 84, 160, 800, 'center'); }
+    else this.arrow(g, 895, 225, 270, Math.PI / 4, 66);
     return cv;
   },
   texNextRest(km) {
