@@ -30,6 +30,7 @@ const CFG_DEFAULT = {
   tunnelSep: 26,       // 쌍굴 이격 (m)
   bridgeShare: -10,    // 구조물 중 교량 비율 % (음수 = 지형대로)
   view: 'cockpit',     // cockpit | chase | high
+  gfx: false,          // 그래픽 향상 (셰이더 후처리 · 표면 잔결) — WebGL 일 때만
 };
 
 const WB = 2.75;                       // 축거 m
@@ -60,6 +61,9 @@ const App = {
       this.ctx = this.cv.getContext('2d', { alpha: false });
     }
     this.mapCv = document.getElementById('mapCv');
+    if (/[?&]fx=1/.test(location.search)) this.cfg.gfx = true;
+    Render.skyCanvas = this.skyCv;
+    Render.enhance = !!(this.cfg.gfx && Render.gl);
     UI.init(this);
     this.bindInput();
     this.rebuild();
@@ -158,6 +162,7 @@ const App = {
     const p = new Vehicle().init('car', c.rng, this.cfg);
     p.isPlayer = true;
     p.color = '#2f6fd0';      // 내 차 — 채도 있는 한 색으로 고정
+    p.auto = this.auto;       // 새 구간으로 넘어가도 자율주행·관전 상태를 잇는다
     p.lane = p.laneT = c.nLane - 1;
     p.s = 400; p.v = 80 * KMH;
     p.u = p.uT = c.laneU(p.lane);
@@ -177,6 +182,12 @@ const App = {
     if (key === 'weather') { this.corrA.rebuildCaps(); if (this.corrB) this.corrB.rebuildCaps(); }
     if (key === 'lanes' || key === 'twoWay') this.rebuildTraffic();
     if (key === 'timeOfDay' || key === 'view') { /* 렌더러가 매 프레임 읽는다 */ }
+    if (key === 'gfx') {
+      if (!Render.gl) { UI.toast('그래픽 향상은 WebGL 이 켜져 있을 때만 쓸 수 있습니다', 3); return; }
+      Render.enhance = !!this.cfg.gfx;
+      if (Render.enhance && !Render.initFx()) { Render.enhance = false; UI.toast('이 기기에서는 그래픽 향상 셰이더를 쓸 수 없습니다', 3); return; }
+      UI.toast(Render.enhance ? '그래픽 향상 켬 — 표면 질감 · 블룸 · FXAA · 색 보정' : '그래픽 향상 끔', 2.5);
+    }
   },
 
   /** 도로는 그대로 두고 교통만 다시 세운다 — 차로 수를 즉시 바꿀 수 있다 */
@@ -233,18 +244,29 @@ const App = {
 
   action(a) {
     switch (a) {
-      case 'auto': this.auto = !this.auto; this.player.auto = this.auto;
+      case 'auto':
+        if (this.spec) {   // 관전 중에는 내 차를 자율주행으로 묶어 두고, 복귀 후 상태만 바꾼다
+          this.spec.wasAuto = !this.spec.wasAuto;
+          UI.toast('관전을 마치면 ' + (this.spec.wasAuto ? '자율주행' : '수동 운전') + '으로 돌아갑니다', 2.5); break;
+        }
+        this.auto = !this.auto; this.player.auto = this.auto;
         UI.toast(this.auto ? '자율주행 — 이 차도 IDM·MOBIL 로 달린다' : '수동 운전', 2.5); break;
+      case 'spectate':
+        if (this.spec) this.exitSpectate();
+        else this.spectate(this.player.s + 80, true);
+        break;
       case 'cam': {
+        if (this.spec) { this.exitSpectate(); break; }
         const order = ['chase', 'cockpit', 'high'];
         this.cfg.view = order[(order.indexOf(this.cfg.view) + 1) % order.length];
         UI.toast({ chase: '추적 시점', cockpit: '운전석 시점', high: '상공 시점' }[this.cfg.view], 1.6); break;
       }
       case 'incident': {
-        const s = this.player.s + 900;
+        // 관전 중이면 관전 지점 앞 250 m 에 낸다 — 정체가 눈앞에서 자라는 것을 본다
+        const s = this.spec ? this.spec.s + 250 : this.player.s + 900;
         if (s < this.corrA.L - 500) {
           const inc = this.corrA.addIncident({ laneBlock: true, s, lane: this.corrA.rng.int(0, this.corrA.nLane - 1) });
-          UI.toast('전방 900m ' + (inc.lane + 1) + '차로 차단 사고 발생', 4);
+          UI.toast((this.spec ? '관전 지점 앞 250m ' : '전방 900m ') + (inc.lane + 1) + '차로 차단 사고 발생', 4);
         }
         break;
       }
@@ -252,13 +274,133 @@ const App = {
       case 'map': this.showMap = !this.showMap; this.mapCv.style.display = this.showMap ? '' : 'none'; break;
       case 'speed': this.speedMul = this.speedMul >= 4 ? 1 : this.speedMul * 2;
         UI.toast('모의 배속 ' + this.speedMul + '배', 1.6); break;
-      case 'reset': this.resetPlayer(); break;
+      case 'reset': if (this.spec) this.exitSpectate(); else this.resetPlayer(); break;
+      case 'specPrev': this.specJump(-1); break;
+      case 'specNext': this.specJump(1); break;
+      case 'specZoomIn': if (this.spec) this.spec.dist = clamp(this.spec.dist / 1.5, 6, 420); break;
+      case 'specZoomOut': if (this.spec) this.spec.dist = clamp(this.spec.dist * 1.5, 6, 420); break;
+      case 'specTop':   // 낮게 옆에서 → 비스듬히 → 거의 수직으로 내려다보기, 를 돌아가며
+        if (this.spec) { const P = [-0.15, -0.45, -1.3]; const i = P.findIndex(v => v < this.spec.pitch - 0.05); this.spec.pitch = P[i < 0 ? 0 : i]; }
+        break;
+      case 'specTurn': if (this.spec) this.spec.yawRel = wrapPi(this.spec.yawRel + Math.PI); break;
     }
     this.syncButtons();
   },
   syncButtons() {
     const ba = document.querySelector('[data-act="auto"]'); if (ba) ba.classList.toggle('on', this.auto);
+    const bv = document.querySelector('[data-act="spectate"]'); if (bv) bv.classList.toggle('on', !!this.spec);
+    document.body.classList.toggle('spec', !!this.spec);
     const bs = document.querySelector('[data-act="speed"]'); if (bs) bs.textContent = '배속 ×' + this.speedMul;
+  },
+
+  /* ---------- 관전 모드 ----------
+     도로 위 한 지점(본선 중앙분리대 위)을 초점으로 두고, 그 둘레를 도는 카메라로 교통류를 본다.
+     내 차는 그동안 자율주행으로 계속 달리고, 모의는 전 구간에서 그대로 돈다.
+     초점은 corrA(내 차 진행방향) 국소 좌표 s 로 둔다 — 지도와 같은 좌표다. */
+  spectate(s, fromCar) {
+    const c = this.corrA;
+    s = clamp(s, 60, c.L - 60);
+    if (!this.spec) {
+      this.spec = {
+        s, yawRel: fromCar ? 0.0 : 0.75, pitch: fromCar ? -0.22 : -0.42, dist: fromCar ? 45 : 90,
+        wasAuto: this.auto,
+      };
+      this.auto = true; this.player.auto = true;
+      this.key = {}; this.specInit = false;
+      UI.toast('관전 모드 — 드래그 회전 · 휠 확대 · W/S 이동 · [ ] 시설 이동 · 지도 클릭 · V 복귀', 5);
+    } else {
+      this.spec.s = s;
+    }
+    this.specLabel();
+    this.syncButtons();
+  },
+  exitSpectate() {
+    if (!this.spec) return;
+    this.auto = this.spec.wasAuto; this.player.auto = this.auto;
+    this.spec = null; this.camInit = false; this.key = {};
+    UI.toast('내 차로 돌아왔습니다', 1.8);
+    this.syncButtons();
+  },
+  /** 관전 지점을 앞뒤의 시설(IC · 터널 · 교량 · 돌발상황)로 옮긴다 */
+  specJump(dir) {
+    if (!this.spec) { this.spectate(this.player.s + 80, true); return; }
+    const c = this.corrA, pts = [];
+    for (const ic of c.icLocal) pts.push({ s: ic.s, name: ic.name });
+    for (const st of this.road.structs) {
+      const a = c.dir > 0 ? st.s0 : c.L - st.s1, b = c.dir > 0 ? st.s1 : c.L - st.s0;
+      pts.push({ s: a - 40, name: (st.name || (st.type === 'tunnel' ? '터널' : '교량')) + ' 입구' });
+      if (st.type === 'tunnel') pts.push({ s: b + 30, name: (st.name || '터널') + ' 출구' });
+    }
+    for (const inc of c.incidents) pts.push({ s: inc.s - 60, name: '돌발상황 · ' + inc.kind });
+    pts.sort((a, b) => a.s - b.s);
+    const cur = this.spec.s;
+    let pick = null;
+    if (dir > 0) { for (const p of pts) if (p.s > cur + 5) { pick = p; break; } }
+    else { for (let i = pts.length - 1; i >= 0; i--) if (pts[i].s < cur - 5) { pick = pts[i]; break; } }
+    if (!pick) { UI.toast(dir > 0 ? '앞쪽에 더 이상 시설이 없습니다' : '뒤쪽에 더 이상 시설이 없습니다', 1.6); return; }
+    this.spec.s = clamp(pick.s, 60, c.L - 60);
+    UI.toast('관전 지점 — ' + pick.name + ' (' + fmt1(this.spec.s / 1000) + ' km)', 2.2);
+  },
+  specLabel() {
+    if (this.spec) UI.toast('관전 지점 ' + fmt1(this.spec.s / 1000) + ' km', 1.4);
+  },
+
+  /** 관전 카메라 — 초점 둘레의 궤도. 키 입력은 실제 경과 시간(rawDt)으로 받는다. */
+  updateSpecCam(dt) {
+    const sp = this.spec, c = this.corrA, rd = this.road, k = this.key;
+    sp.s = clamp(sp.s, 60, c.L - 60);
+    // 키 조작: W/S 도로를 따라 이동, A/D 회전, Q/E 확대·축소, R/F 고개 (Shift 빠르게)
+    const fast = k.shift ? 4 : 1;
+    const mv = (k.w || k.arrowup ? 1 : 0) - (k.s || k.arrowdown ? 1 : 0);
+    if (mv) sp.s = clamp(sp.s + mv * dt * fast * (25 + sp.dist * 0.8), 60, c.L - 60);
+    const rot = (k.d || k.arrowright ? 1 : 0) - (k.a || k.arrowleft ? 1 : 0);
+    sp.yawRel = wrapPi(sp.yawRel - rot * dt * 1.2);
+    const zm = (k.e ? 1 : 0) - (k.q ? 1 : 0);
+    if (zm) sp.dist = clamp(sp.dist * Math.exp(-zm * dt * 1.4), 6, 420);
+    const tl = (k.f ? 1 : 0) - (k.t ? 1 : 0);
+    if (tl) sp.pitch = clamp(sp.pitch - tl * dt * 0.8, -1.45, -0.02);
+
+    const g = c.geo(sp.s);
+    const fwd = g.hdg + (c.dir > 0 ? 0 : Math.PI);
+    const inTun = c.structA && c.structA[c.jOf(sp.s)] === 2;
+    const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg);
+    /* 초점은 보통 중앙분리대 위(양방향이 함께 보인다). 쌍굴에서는 두 굴이 갈라져 그 자리가
+       암반 속이므로, 내 차 진행방향 굴의 차도 한가운데로 옮긴다. */
+    const half = c.outerEdge() * 0.5;
+    const uF = inTun ? (c.dir > 0 ? g.med + half : -(g.med + half)) : 0;
+    const fx = g.x + nx * uF, fy = g.y + ny * uF, fz = g.z + rd.crossZ(g, uF) + 1.2;
+    let yaw = fwd + sp.yawRel, dist = sp.dist, pitch = sp.pitch;
+    if (inTun) { dist = Math.min(dist, 40); pitch = Math.max(pitch, -0.35); }
+    const cp = Math.cos(pitch);
+    let tx = fx - Math.cos(yaw) * cp * dist, ty = fy - Math.sin(yaw) * cp * dist;
+    let tz = fz - Math.sin(pitch) * dist;
+    if (inTun) {
+      // 굴 안에서는 굴 단면 안에 머문다 — 옆으로는 차도 폭만큼, 위로는 천장 아래까지
+      const lat = (tx - fx) * nx + (ty - fy) * ny;
+      const lim = half - 0.5;
+      if (Math.abs(lat) > lim) { const d = (Math.abs(lat) - lim) * sgn(lat); tx -= nx * d; ty -= ny * d; }
+      tz = Math.min(tz, g.z + RoadStd.tunnelH - 1.4);
+    } else {
+      tz = Math.max(tz, Math.max(rd.terrain(tx, ty), rd.waterZ) + 2.5);
+    }
+    // 위치가 땅에 밀려 올라가도 시선은 늘 초점을 향한다
+    const dx = fx - tx, dy = fy - ty, dz = fz - tz;
+    const yawT = Math.atan2(dy, dx), pitchT = Math.atan2(dz, Math.hypot(dx, dy));
+
+    const cam = this.cam;
+    // 처음 들어올 때와 멀리 건너뛸 때는 바로 옮긴다 — 산을 뚫고 날아가는 모습을 보이지 않는다
+    if (!this.camInit || !this.specInit || Math.hypot(cam.x - tx, cam.y - ty) > 600) {
+      cam.x = tx; cam.y = ty; cam.z = tz; cam.yaw = yawT; cam.pitch = pitchT; cam.roll = 0;
+      this.camInit = true; this.specInit = true;
+    }
+    const tau = 0.08;
+    cam.x = approach(cam.x, tx, tau, dt); cam.y = approach(cam.y, ty, tau, dt); cam.z = approach(cam.z, tz, tau, dt);
+    cam.yaw += wrapPi(yawT - cam.yaw) * (1 - Math.exp(-dt / tau));
+    cam.pitch = approach(cam.pitch, pitchT, tau, dt);
+    cam.roll = approach(cam.roll, 0, 0.2, dt);
+    this.fov = approach(this.fov || 55, 55, 0.4, dt);
+    Render.fov = this.fov * Math.PI / 180;
+    this.sCam = sp.s;
   },
 
   resetPlayer() {
@@ -279,7 +421,10 @@ const App = {
       Sound.arm();
       const k = e.key.toLowerCase();
       this.key[k] = 1;
-      if (k === 'c') this.action('cam');
+      if (k === 'v') this.action('spectate');
+      else if (k === '[') this.action('specPrev');
+      else if (k === ']') this.action('specNext');
+      else if (k === 'c') this.action('cam');
       else if (k === 'p') this.action('auto');
       else if (k === 'i') this.action('incident');
       else if (k === 'm') this.action('map');
@@ -293,6 +438,46 @@ const App = {
     addEventListener('keyup', (e) => { this.key[e.key.toLowerCase()] = 0; });
     addEventListener('blur', () => { this.key = {}; });
     this.cv.addEventListener('pointerdown', () => Sound.arm());
+
+    // 관전 카메라 — 화면을 끌어 돌리고, 휠로 당기고 민다
+    let drag = null;
+    this.cv.addEventListener('pointerdown', (e) => {
+      if (!this.spec) return;
+      drag = { x: e.clientX, y: e.clientY };
+      this.cv.setPointerCapture(e.pointerId);
+    });
+    this.cv.addEventListener('pointermove', (e) => {
+      if (!drag || !this.spec) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag.x = e.clientX; drag.y = e.clientY;
+      this.spec.yawRel = wrapPi(this.spec.yawRel - dx * 0.006);
+      this.spec.pitch = clamp(this.spec.pitch - dy * 0.005, -1.45, -0.02);
+    });
+    const end = () => { drag = null; };
+    this.cv.addEventListener('pointerup', end);
+    this.cv.addEventListener('pointercancel', end);
+    this.cv.addEventListener('wheel', (e) => {
+      if (!this.spec) return;
+      e.preventDefault();
+      this.spec.dist = clamp(this.spec.dist * Math.exp(e.deltaY * 0.0012), 6, 420);
+    }, { passive: false });
+
+    // 지도를 누르면 그 지점에서 관전한다 (누른 채로 끌면 지점이 따라간다)
+    const mapS = (e) => {
+      const cv = this.mapCv, r = cv.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width * cv.width;
+      return clamp((x - 4) / (cv.width - 8), 0, 1) * this.corrA.L;
+    };
+    let mapDrag = false;
+    this.mapCv.addEventListener('pointerdown', (e) => {
+      Sound.arm();
+      mapDrag = true; this.mapCv.setPointerCapture(e.pointerId);
+      this.spectate(mapS(e), false);
+    });
+    this.mapCv.addEventListener('pointermove', (e) => { if (mapDrag && this.spec) this.spec.s = clamp(mapS(e), 60, this.corrA.L - 60); });
+    const mEnd = () => { if (mapDrag) { mapDrag = false; this.specLabel(); } };
+    this.mapCv.addEventListener('pointerup', mEnd);
+    this.mapCv.addEventListener('pointercancel', mEnd);
   },
 
   /* ---------- 플레이어 물리 ---------- */
@@ -495,7 +680,7 @@ const App = {
         this.player.v = keepV;
         UI.toast('새 구간 — ' + this.roadSummary(), 5);
       }
-      this.updateCam(dt);
+      if (this.spec) this.updateSpecCam(dt); else this.updateCam(dt);
     }
 
     this.render();
@@ -508,16 +693,20 @@ const App = {
 
   render() {
     const p = this.player, c = this.corrA;
-    const inTunnel = c.structA ? c.structA[c.jOf(p.s)] === 2 : false;
+    const sp = this.spec;
+    let inTunnel = c.structA ? c.structA[c.jOf(sp ? sp.s : p.s)] === 2 : false;
+    // 관전 카메라가 굴 위로 떠 있으면 굴 밖 풍경으로 그린다
+    if (sp && inTunnel) { const g = c.geo(sp.s); inTunnel = this.cam.z < g.z + RoadStd.tunnelH; }
     Scene.draw(this.ctx, this.W, this.H, {
       road: this.road, corrA: this.corrA, corrB: this.corrB,
       cam: this.cam, sCam: c.roadS(this.sCam || p.s),
       timeOfDay: this.cfg.timeOfDay, weather: this.cfg.weather,
       inTunnel, time: this.simTime, sunAz: 0.9,
-      hidePlayer: this.cfg.view === 'cockpit',
+      hidePlayer: !sp && this.cfg.view === 'cockpit',
+      spectate: !!sp, specR: sp ? Render.drawDist * 0.7 + sp.dist : 0,
       skyCtx: this.skyCtx,
     });
-    if (this.cfg.view === 'cockpit') this.dashboard();
+    if (!sp && this.cfg.view === 'cockpit') this.dashboard();
   },
 
   /** 운전석 시점 — 보닛과 A필러.
@@ -601,9 +790,9 @@ const Sound = {
     const rpm = 55 + (v - gear * 9) * 13 + (p.throttle || 0) * 22;
     this.o1.frequency.setTargetAtTime(rpm, t, 0.08);
     this.o2.frequency.setTargetAtTime(rpm * 0.5, t, 0.08);
-    this.eg.gain.setTargetAtTime(0.035 + (p.throttle || 0) * 0.075, t, 0.15);
+    this.eg.gain.setTargetAtTime(app.spec ? 0 : 0.035 + (p.throttle || 0) * 0.075, t, 0.15);
     this.lp.frequency.setTargetAtTime(420 + v * 12, t, 0.2);
-    this.ng.gain.setTargetAtTime(clamp(v / 46, 0, 1) * 0.11 + (p.offRoad ? 0.10 : 0), t, 0.12);
+    this.ng.gain.setTargetAtTime(app.spec ? 0.03 : clamp(v / 46, 0, 1) * 0.11 + (p.offRoad ? 0.10 : 0), t, 0.12);
     // 터널 안에서는 소리가 갇힌다
     const tun = app.corrA.structA && app.corrA.structA[app.corrA.jOf(p.s)] === 2;
     this.bp.frequency.setTargetAtTime(tun ? 420 : 900, t, 0.3);

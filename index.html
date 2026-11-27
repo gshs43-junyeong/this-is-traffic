@@ -61,7 +61,15 @@ body.gl #sky,body.gl #gl{display:block}
 
 /* 하단 지도 */
 #mapWrap{position:absolute;left:50%;transform:translateX(-50%);bottom:16px;padding:6px}
-#mapCv{display:block;border-radius:4px}
+#mapCv{display:block;border-radius:4px;pointer-events:auto;cursor:crosshair}
+body.spec #view{cursor:grab}
+/* 관전 조작 막대 — 관전 중에만 화면 위쪽 가운데에 뜬다 */
+#specBar{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);display:none;gap:5px;padding:5px;
+  pointer-events:auto;flex-wrap:wrap;justify-content:center;width:max-content;max-width:calc(100vw - 32px);white-space:nowrap}
+body.spec #specBar{display:flex}
+#specBar button{padding:5px 10px;font-size:12px}
+#specBar .lbl{align-self:center;font-size:12px;color:#4fd1ff;font-weight:700;padding:0 5px}
+body.spec #view:active{cursor:grabbing}
 #mapLegend{display:flex;gap:12px;justify-content:center;font-size:10.5px;color:var(--dim);margin-top:5px}
 #mapLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 
@@ -146,7 +154,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 
     <!-- 교통 상태 -->
     <div id="trafbox" class="card">
-      <h3>교통류 (반경 600m)</h3>
+      <h3 id="trafTitle">교통류 (반경 600m)</h3>
       <div class="row"><span class="k">서비스수준 LOS</span><span class="v"><span class="los los-" id="losV">-</span></span></div>
       <div class="row"><span class="k">밀도 k</span><span class="v"><span id="kV">—</span> 대/km/차로</span></div>
       <div class="row"><span class="k">교통량 q</span><span class="v"><span id="qV">—</span> 대/시/차로</span></div>
@@ -179,7 +187,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
     <div id="keys">
       <b>W/S</b> 가속·제동 &nbsp; <b>A/D</b> 조향 &nbsp; <b>Space</b> 급제동<br>
       <b>C</b> 시점 &nbsp; <b>P</b> 자율주행 &nbsp; <b>I</b> 사고 발생 &nbsp; <b>J</b> 유령정체 &nbsp; <b>R</b> 위치복귀<br>
-      <b>M</b> 지도 &nbsp; <b>X</b> 배속 &nbsp; <b>N</b> 소리 &nbsp; <b>Esc</b> 설정·분석
+      <b>M</b> 지도 &nbsp; <b>X</b> 배속 &nbsp; <b>N</b> 소리 &nbsp; <b>Esc</b> 설정·분석<br>
+      <b>V</b> 관전 (지도 클릭으로 지점 지정 · 드래그 회전 · 휠 확대 · W/S 이동 · <b>[ ]</b> 시설 이동)
     </div>
 
     <!-- 전 구간 지도 -->
@@ -192,18 +201,32 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <span><i style="background:#3a3550"></i>터널</span>
         <span><i style="background:#2f4550"></i>교량</span>
         <span><i style="background:#fff"></i>내 차</span>
+        <span><i style="background:#4fd1ff"></i>관전 지점 (클릭)</span>
       </div>
     </div>
 
     <div id="tools">
       <button data-act="auto">자율주행 (P)</button>
       <button data-act="cam">시점 전환 (C)</button>
+      <button data-act="spectate">관전 모드 (V)</button>
       <button data-act="incident">사고 발생 (I)</button>
       <button data-act="phantomjam">유령정체 (J)</button>
       <button data-act="speed">배속 ×1</button>
       <button id="btnMenu" class="primary">설정 · 분석 (Esc)</button>
       <a href="parking.html" style="display:contents"><button>주차장 시뮬레이터 →</button></a>
       <a href="city.html" style="display:contents"><button>도시 교통 시뮬레이터 →</button></a>
+    </div>
+
+    <div id="specBar" class="card">
+      <span class="lbl">관전</span>
+      <button data-act="specPrev" title="뒤쪽 시설로 ( [ )">◀ 이전 시설</button>
+      <button data-act="specNext" title="앞쪽 시설로 ( ] )">다음 시설 ▶</button>
+      <button data-act="specZoomIn" title="다가가기 (E · 휠)">＋ 확대</button>
+      <button data-act="specZoomOut" title="멀어지기 (Q · 휠)">－ 축소</button>
+      <button data-act="specTop" title="내려다보기 ↔ 옆에서 보기">시점 높이</button>
+      <button data-act="specTurn" title="반대 방향 보기">↻ 뒤돌기</button>
+      <button data-act="incident" title="관전 지점 앞 250m (I)">여기 사고</button>
+      <button data-act="spectate" class="primary" title="V">내 차로 복귀</button>
     </div>
 
     <div id="toast"></div>
@@ -270,6 +293,10 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
             <div class="hint">우천 시 희망속도 −10%, 희망 차두시간 +15%, 마찰계수 저하.</div></div>
           <div class="fld"><label>시간대</label>
             <select data-cfg="timeOfDay" data-live="1"><option value="day">주간</option><option value="dusk">황혼</option><option value="night">야간</option></select></div>
+          <div class="fld chk" style="align-items:flex-start">
+            <input type="checkbox" id="cbGfx" data-cfg="gfx" data-live="1">
+            <div><label for="cbGfx">그래픽 향상 (셰이더)</label>
+              <div class="hint">노면·풀밭 질감, 등화·햇빛 번짐(블룸), 가장자리 계단 제거(FXAA), 색 보정과 비네트. 느린 기기에서는 프레임이 떨어질 수 있다. 주소에 ?fx=1 을 붙여 켠 채로 시작할 수도 있다.</div></div></div>
           <div class="fld chk" style="align-items:flex-start">
             <input type="checkbox" id="cbPeak" data-cfg="peak" data-live="1">
             <div><label for="cbPeak">첨두 수요 프로파일</label>
