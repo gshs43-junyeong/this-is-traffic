@@ -133,6 +133,9 @@ const Render = {
       this.pSolid = prog(VS, 'precision mediump float;varying vec4 v;void main(){gl_FragColor=vec4(v.rgb*v.a,v.a);}');
       // 빛 번짐 — 사각형 안에서 가운데가 밝고 가장자리로 사라진다 (더하기 합성)
       this.pGlow = prog(VS, 'precision mediump float;varying vec4 v;varying vec2 w;void main(){float r=length(w);float k=clamp(1.0-r,0.0,1.0);k=k*k*(0.35+0.65*k);gl_FragColor=vec4(v.rgb*v.a*k,v.a*k);}');
+      // 그림 붙인 사각형 (도로 표지판 글씨) — 밝기 k 는 낮 · 밤에 맞춘다
+      this.pTex = prog('attribute vec3 p;attribute vec2 q;uniform vec2 f;uniform vec2 d;varying vec2 w;void main(){w=q;gl_Position=vec4(p.x*f.x,p.y*f.y,d.x*p.z+d.y,p.z);}',
+        'precision mediump float;varying vec2 w;uniform sampler2D t;uniform float k;void main(){vec4 c=texture2D(t,w);gl_FragColor=vec4(c.rgb*k,1.0);}');
     } catch (e) { console.warn('WebGL 셰이더 실패 — 캔버스 2D 로 그린다', e); return false; }
     this.gl = gl;
     this.vb = { p: gl.createBuffer(), c: gl.createBuffer(), q: gl.createBuffer() };
@@ -140,6 +143,7 @@ const Render = {
     this.bOp = mk(); this.bTr = mk(); this.bMk = mk();
     this.bGl = mk(); this.bGl.q = new Float32Array(2 * 65536);
     this.colCache = new Map();
+    this.texCache = new Map(); this.texQ = new Map();
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.gl = null; if (this.onLost) this.onLost(); });
     return true;
   },
@@ -228,7 +232,60 @@ const Render = {
     const V = (dx, dy) => { const i = b.n; this._vert(b, X + dx * r, Y + dy * r, z0, col, a); b.q[i * 2] = dx; b.q[i * 2 + 1] = dy; };
     V(-1, -1); V(1, -1); V(1, 1); V(-1, -1); V(1, 1); V(-1, 1);
   },
-  glBegin() { this.bOp.n = this.bTr.n = this.bMk.n = this.bGl.n = 0; },
+  glBegin() { this.bOp.n = this.bTr.n = this.bMk.n = this.bGl.n = 0; if (this.texQ) for (const q of this.texQ.values()) q.n = 0; },
+  /**
+   * 그림 붙인 사각형 — 네 꼭짓점(세계 좌표, 그림의 왼아래 · 오른아래 · 오른위 · 왼위)에 make() 가 그린 캔버스를 붙인다.
+   * 같은 key 의 그림은 한 번만 만들어 올린다. GL 이면 깊이 판정을 받고, 아니면 2D 로 비스듬히 그린다(가림 없음).
+   */
+  texQuad(key, make, P, bright) {
+    if (!this.gl) return this.texQuad2D(key, make, P);
+    const gl = this.gl;
+    let T = this.texCache.get(key);
+    if (!T) {
+      let cv = make();
+      // ★ WebGL 1 은 2 의 거듭제곱이 아닌 그림에 밉맵을 못 만든다(검게 나온다) — 크기를 맞춰 옮겨 그린다
+      const pw = (v) => 2 ** Math.ceil(Math.log2(v));
+      if (pw(cv.width) !== cv.width || pw(cv.height) !== cv.height) {
+        const c2 = document.createElement('canvas'); c2.width = pw(cv.width); c2.height = pw(cv.height);
+        c2.getContext('2d').drawImage(cv, 0, 0, c2.width, c2.height); cv = c2;
+      }
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      T = { tex, cv };
+      if (this.texCache.size > 120) { for (const [k, o] of this.texCache) { gl.deleteTexture(o.tex); this.texCache.delete(k); this.texQ.delete(k); break; } }
+      this.texCache.set(key, T);
+    }
+    const C = P.map((q) => this.camPt(q[0], q[1], q[2]));
+    if (C.some((c) => c[2] < 0.3)) return;
+    let Q = this.texQ.get(key);
+    if (!Q) { Q = { p: new Float32Array(18 * 8), q: new Float32Array(12 * 8), n: 0 }; this.texQ.set(key, Q); }
+    if ((Q.n + 6) * 3 > Q.p.length) { const p2 = new Float32Array(Q.p.length * 2); p2.set(Q.p); Q.p = p2; const q2 = new Float32Array(Q.q.length * 2); q2.set(Q.q); Q.q = q2; }
+    const UV = [[0, 1], [1, 1], [1, 0], [0, 0]];
+    for (const i of [0, 1, 2, 0, 2, 3]) {
+      const c = C[i], j = Q.n++;
+      Q.p[j * 3] = c[0]; Q.p[j * 3 + 1] = c[1]; Q.p[j * 3 + 2] = c[2];
+      Q.q[j * 2] = UV[i][0]; Q.q[j * 2 + 1] = UV[i][1];
+    }
+    Q.k = bright == null ? 1 : bright;
+  },
+  /** 2D 캔버스로 — 세 꼭짓점으로 맞춘 아핀 변환 (원근은 근사) */
+  texQuad2D(key, make, P) {
+    if (!this.texCache) this.texCache = new Map();
+    let T = this.texCache.get(key);
+    if (!T) { T = { cv: make() }; this.texCache.set(key, T); }
+    const a = this.point(...P[3]), b = this.point(...P[2]), c = this.point(...P[0]);
+    if (!a || !b || !c) return;
+    const w = T.cv.width, h = T.cv.height, ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform((b.x - a.x) / w, (b.y - a.y) / w, (c.x - a.x) / h, (c.y - a.y) / h, a.x, a.y);
+    ctx.drawImage(T.cv, 0, 0);
+    ctx.restore();
+  },
   glFlush() {
     const gl = this.gl; if (!gl) return;
     const W = gl.canvas.width, H = gl.canvas.height;
@@ -265,6 +322,29 @@ const Render = {
     gl.disable(gl.BLEND);
     draw(this.pSolid, this.bOp, false);
     draw(this.pSolid, this.bMk, false);
+    // 표지판 글씨 — 불투명, 깊이 판정
+    if (this.texQ && this.texQ.size) {
+      const P = this.pTex;
+      gl.useProgram(P);
+      const L = P._loc || (P._loc = { f: gl.getUniformLocation(P, 'f'), d: gl.getUniformLocation(P, 'd'), t: gl.getUniformLocation(P, 't'), k: gl.getUniformLocation(P, 'k'), p: gl.getAttribLocation(P, 'p'), q: gl.getAttribLocation(P, 'q') });
+      gl.uniform2f(L.f, this.focal / (W / 2), this.focal / (H / 2));
+      gl.uniform2f(L.d, (F + n) / (F - n), -2 * F * n / (F - n));
+      gl.uniform1i(L.t, 0); gl.activeTexture(gl.TEXTURE0);
+      // 다른 프로그램이 켜 둔 색 속성은 끈다 (이 프로그램에는 없다)
+      for (let a = 0; a < 4; a++) if (a !== L.p && a !== L.q) gl.disableVertexAttribArray(a);
+      for (const [key, Q] of this.texQ) {
+        if (!Q.n) continue;
+        const T = this.texCache.get(key); if (!T) continue;
+        gl.bindTexture(gl.TEXTURE_2D, T.tex);
+        gl.uniform1f(L.k, Q.k);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vb.p); gl.bufferData(gl.ARRAY_BUFFER, Q.p.subarray(0, Q.n * 3), gl.STREAM_DRAW);
+        gl.enableVertexAttribArray(L.p); gl.vertexAttribPointer(L.p, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vb.q); gl.bufferData(gl.ARRAY_BUFFER, Q.q.subarray(0, Q.n * 2), gl.STREAM_DRAW);
+        gl.enableVertexAttribArray(L.q); gl.vertexAttribPointer(L.q, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, Q.n);
+      }
+      gl.disableVertexAttribArray(L.q);
+    }
     // 반투명(그림자) — 불투명 위에 순서대로, 깊이는 쓰지 않는다
     gl.enable(gl.BLEND); gl.depthMask(false);
     gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -320,7 +400,9 @@ const Scene = {
     if (Render.gl) { ctx.clearRect(0, 0, W, H); Render.glBegin(); }
     this.sky(skyCtx, W, H, pal, sc);
     if (!sc.inTunnel) this.hills(skyCtx, W, H, pal, sc);
+    if (typeof HwyFx !== 'undefined' && sc.road.ics) HwyFx.sync(sc);
     this.corridor(ctx, sc);
+    if (typeof HwyFx !== 'undefined' && sc.road.ics && !sc.inTunnel) HwyFx.draw(ctx, sc);     // 표지판 · 휴게소 · 영업소 · 분기점 연결로
     if (Render.gl) Render.glFlush();
     this.overlay(ctx, W, H, sc);
   },
