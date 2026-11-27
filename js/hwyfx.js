@@ -2,7 +2,7 @@
    hwyfx.js — 고속도로 시설의 생김새: 도로 표지판 · 휴게소 · 영업소(요금소) · 분기점 연결로
 
    표지판 (한국 고속도로 안내표지와 비슷하게 — 녹색 바탕에 흰 글씨, 휴게소는 청색 바탕)
-     놓는 자리   출구(감속차로 시작)까지 2 km · 1 km 는 차로 위 문형 표지, 500 m · 0 m 는 갓길 밖 높은 기둥 표지,
+     놓는 자리   출구(감속차로 시작)까지 2 km · 1 km 는 차로 위 문형 표지, 500 m · 0 m 는 갓길 기둥에서 팔을 뻗은 외팔식 표지,
                  갈림목 코에 작은 분류 표지.
      나들목(IC)   본판 — 왼쪽 일반국도 번호(파란 타원), 갈 곳 둘(한글 크게 · 로마자 옆), 오른쪽 ↗ (예고는 ↗ 와 거리).
                  본판 위 오른쪽에 붙은 출구 꼬리표 — 검은 칸의 출구 번호 · IC 이름 · 나가는 차로 그림.
@@ -193,16 +193,16 @@ const HwyFx = {
     this.panel(corr, s, uc, zb, W, H, this.mainKey(site, dist), () => this.texMain(site, dist), d);
     if (tabH) this.tab(site, s, uc + W / 2, zb + H + 0.06, tabH, d);
   },
-  /** 갓길 밖 높은 기둥 표지 (500 m · 0 m) — 기둥은 판 뒤에 선다 */
+  /** 외팔식 표지 (500 m · 0 m) — 갓길 밖 기둥에서 팔을 뻗어 바깥 차로 위에 본판 (판 아래 5.6 m).
+      ★ 기둥 · 팔은 판 뒤(s + 0.4)에 둔다 — 판과 같은 자리면 판 앞으로 튀어나와 글씨 위에 철봉이 보인다 */
   roadside(site, s, dist) {
     const corr = site.corr, d = this.near(corr, s); if (d < 0) return;
-    const t = site.inf.type, W = 6.0, H = W / MAIN_AR, tabH = t === 'rest' ? 0 : H * 0.3;
-    const uc = this.edgeU(corr, s) + 3.6, hb = 5.2;          // 높은 봉 — 판 아래가 차 지붕보다 한참 위
-    // ★ 기둥을 판과 같은 자리(s)에 세우면 판 앞으로 반쯤 튀어나와 글씨 위에 철봉이 보인다 — 뒤로 물린다
-    this.posts(corr, s + 0.38, [uc - W * 0.3], hb + H - 0.1, 0.26, d);
-    this.posts(corr, s + 0.38, [uc + W * 0.3], hb + H + tabH - 0.1, 0.26, d);
-    this.beam(corr, s + 0.38, uc - W * 0.3, uc + W * 0.3, hb + H * 0.25, 0.16, d);
-    this.beam(corr, s + 0.38, uc - W * 0.3, uc + W * 0.3, hb + H * 0.75, 0.16, d);
+    const t = site.inf.type, W = 6.0, H = W / MAIN_AR, tabH = t === 'rest' ? 0 : H * 0.3, hb = 5.6;
+    const eu = this.edgeU(corr, s), pu = eu + 1.4, uc = RoadStd.shL + RoadStd.laneW * (corr.nLane - 0.5) + 1.0, sb = s + 0.4;
+    this.posts(corr, sb, [pu], hb + H + tabH + 0.2, 0.34, d);
+    this.beam(corr, sb, uc - W / 2 + 0.3, pu, hb + H * 0.75, 0.24, d);
+    this.beam(corr, sb, uc - W / 2 + 0.3, pu, hb + H * 0.25, 0.2, d);
+    if (tabH) this.beam(corr, sb, uc + W / 2 - tabH * TAB_AR + 0.3, pu, hb + H + tabH * 0.5, 0.16, d);
     this.panel(corr, s, uc, hb, W, H, this.mainKey(site, dist), () => this.texMain(site, dist), d);
     if (tabH) this.tab(site, s, uc + W / 2, hb + H + 0.05, tabH, d);
   },

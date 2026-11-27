@@ -715,7 +715,11 @@ const Scene = {
     const rd = this.road, sc = this.sc;
     const g = rd.at(sRoad);
     const st = g.struct;
-    const shW = st ? RoadStd.shRnarrow : RoadStd.shR;
+    /* ★ 바깥 갓길은 교량 · 터널 앞뒤 60 m 에 걸쳐 서서히 좁힌다. 구조물 경계 한 단면에서 3.0 → 1.25 m 로
+       끊으면 갱구 테두리가 갓길을 칼로 자른 듯 보였다. */
+    let nar = st ? 1 : 0;
+    if (!st && rd.structs) for (const x of rd.structs) { const d = Math.max(x.s0 - sRoad, sRoad - x.s1); if (d < 60) nar = Math.max(nar, 1 - smoothstep(d / 60)); }
+    const shW = lerp(RoadStd.shR, RoadStd.shRnarrow, nar);
     const A = sc.corrA, B = sc.corrB;
     const auxA = A ? A.auxWidth(A.dir > 0 ? sRoad : rd.len - sRoad) : 0;
     const auxB = B ? B.auxWidth(B.dir > 0 ? sRoad : rd.len - sRoad) : 0;
@@ -1310,8 +1314,18 @@ const Scene = {
         this.quad(this.pt(a, u - w, 0), this.pt(a, u + w, 0), this.pt(a, u + w, 0.80), this.pt(a, u - w, 0.80), dark);
       }
     };
-    if (needR) rail(a.aSh + 0.5);
-    if (needL) rail(a.bSh - 0.5);
+    /* ★ 램프가 본선에 붙어 있는 구간(사이가 6 m 안 — 노즈 앞뒤)에는 본선 바깥 가드레일 · 시선유도표를 두지 않는다.
+       본선 갓길 끝에 그대로 세우면 합류 · 분류하는 램프 노면을 가로막았다. 대신 램프 바깥 끝에 가드레일을 둔다. */
+    const gap = (sec, R) => { const r = R ? sec.rampR : sec.rampL; return r ? (R ? r.in - sec.aSh : sec.bSh - r.in) : Infinity; };
+    const nearR = Math.min(gap(a, 1), gap(b, 1)) < 6, nearL = Math.min(gap(a, 0), gap(b, 0)) < 6;
+    const railZ = (ua, za, ub, zb) => {
+      this.quad(this.ptZ(a, ua, za + 0.50), this.ptZ(b, ub, zb + 0.50), this.ptZ(b, ub, zb + 0.62), this.ptZ(a, ua, za + 0.62), beam);
+      this.quad(this.ptZ(a, ua, za + 0.68), this.ptZ(b, ub, zb + 0.68), this.ptZ(b, ub, zb + 0.80), this.ptZ(a, ua, za + 0.80), top);
+    };
+    if (needR && !nearR) rail(a.aSh + 0.5);
+    if (needL && !nearL) rail(a.bSh - 0.5);
+    if (needR && a.rampR && b.rampR) railZ(a.rampR.out + 0.3, a.rampR.inZ, b.rampR.out + 0.3, b.rampR.inZ);
+    if (needL && a.rampL && b.rampL) railZ(a.rampL.out - 0.3, a.rampL.inZ, b.rampL.out - 0.3, b.rampL.inZ);
     // 시선유도표 (야간에 특히 눈에 띈다)
     if (lod >= 2 && dist < 220 && (Math.floor(a.sRoad / 44) !== Math.floor(b.sRoad / 44))) {
       const col = sc.timeOfDay === 'night' ? '#ffe680' : '#e8e2c8';
@@ -1320,8 +1334,8 @@ const Scene = {
       };
       const sz = Render.H / 720;
       const q1 = this.pt(a, a.aSh + 0.35, 0.95), q2 = this.pt(a, a.bSh - 0.35, 0.95);
-      if (Render.depth(q1[0], q1[1], q1[2]) < 300) Render.mark(q1[0], q1[1], q1[2], 2.1 * sz, 3.8 * sz, col);
-      if (Render.depth(q2[0], q2[1], q2[2]) < 300) Render.mark(q2[0], q2[1], q2[2], 2.1 * sz, 3.8 * sz, col);
+      if (!nearR && Render.depth(q1[0], q1[1], q1[2]) < 300) Render.mark(q1[0], q1[1], q1[2], 2.1 * sz, 3.8 * sz, col);
+      if (!nearL && Render.depth(q2[0], q2[1], q2[2]) < 300) Render.mark(q2[0], q2[1], q2[2], 2.1 * sz, 3.8 * sz, col);
     }
   },
 
