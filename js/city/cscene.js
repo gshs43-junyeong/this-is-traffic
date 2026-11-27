@@ -44,6 +44,7 @@ const CScene = {
     for (const L of net.links) this.linkSurface(M, L, rng);
     for (const R of net.roads) this.roadStructure(M, R);
     for (const N of net.nodes) this.nodeSurface(M, N);
+    for (const N of net.nodes) if (N.gores) for (const g of N.gores) this.gore(M, g);
     for (const L of net.links) this.markings(M, L);
     for (const N of net.nodes) if (N.ctl === 'signal') for (const L of N.inLinks) this.signalMast(M, L);
     for (const N of net.nodes) if (N.ctl === 'stop') for (const L of N.inLinks) if (N.conns.some((c) => c.from.link === L && c.minor)) this.stopSign(M, L);
@@ -153,6 +154,7 @@ const CScene = {
     const step = 2, n = Math.ceil(R.L / step), o = {}, q = {};
     const pt = (s, off, z) => { shapeAt(g, s, o); return [o.x + Math.sin(o.h) * off, o.y - Math.cos(o.h) * off, z == null ? o.z : z]; };
     let lastPier = -1e9, lid = null;
+    const noBar = (side, sc) => (R.noBar || []).some((q) => q.side === side && sc >= q.a && sc <= q.b);
     for (let i = 0; i < n; i++) {
       const sa = i * step, sb = Math.min(R.L, sa + step);
       shapeAt(g, sa, o); shapeAt(g, sb, q);
@@ -175,6 +177,7 @@ const CScene = {
         }
         // 난간 — 상판 · 둑 위 바깥 끝
         if (Math.min(za, zb) > 1.0) for (const [ea, eb, s] of [[la, lb, 1], [ra, rb, -1]]) {
+          if (noBar(-s, sa)) continue;
           const ia = ea + s * 0.45, ib = eb + s * 0.45;
           M.quad(pt(sa, ea, za), pt(sb, eb, zb), pt(sb, eb, zb + 1.05), pt(sa, ea, za + 1.05), shade(CCOL.barrier, 0.9));
           M.quad(pt(sa, ia, za), pt(sb, ib, zb), pt(sb, ib, zb + 1.05), pt(sa, ia, za + 1.05), shade(CCOL.barrier, 1.0));
@@ -202,7 +205,7 @@ const CScene = {
         M.quad(pt(sa, -0.3, za + 0.85), pt(sb, -0.3, zb + 0.85), pt(sb, 0.3, zb + 0.85), pt(sa, 0.3, za + 0.85), shade(CCOL.barrier, 1.06));
         if (i % 30 === 15) { const p = pt(sa, 0, za + 0.85); M.box(p[0] - 0.1, p[1] - 0.1, p[2], p[0] + 0.1, p[1] + 0.1, p[2] + 9, CCOL.pole, 0, true); for (const s of [-1, 1]) { const c = pt(sa, s * 2.2, za + 9.6); this.lamps.push(c); this.beam(M, [p[0], p[1], p[2] + 9], [c[0], c[1], c[2] - 0.6], 0.16, 0.16, CCOL.pole); } }
       } else if (cl.fast && za > -0.25 && za < 0.3) {     // 지상 고속 · 램프 바깥 방호벽
-        for (const [ea, eb] of [[la, lb], [ra, rb]]) M.quad(pt(sa, ea, za), pt(sb, eb, zb), pt(sb, eb, zb + 0.8), pt(sa, ea, za + 0.8), shade(CCOL.barrier, 0.95));
+        for (const [ea, eb, s] of [[la, lb, -1], [ra, rb, 1]]) if (!noBar(s, sa)) M.quad(pt(sa, ea, za), pt(sb, eb, zb), pt(sb, eb, zb + 0.8), pt(sa, ea, za + 0.8), shade(CCOL.barrier, 0.95));
       }
     }
   },
@@ -236,12 +239,23 @@ const CScene = {
   nodeSurface(M, N) {
     if (N.ctl === 'end') return this.culDeSac(M, N);
     if (N.legs.length < 2) return;
-    const legs = N.legs, k = legs.length, E = legs.map((l) => this.legEnds(l)), z = N.z + 0.004;
+    let legs = N.legs;
+    if (N.ctl === 'merge' && legs.some((l) => l.attach)) {
+      // 램프는 본선 옆에 나란히 붙는다 — 노드 바닥은 본선끼리, 램프는 끝을 노드 쪽으로 조금 늘린 조각으로 잇는다
+      for (const l of legs) if (l.attach) {
+        const e = this.legEnds(l), bx = -Math.cos(e.u) * 4.6, by = -Math.sin(e.u) * 4.6, z = N.z + 0.004;
+        M.quad([e.R[0], e.R[1], z], [e.L[0], e.L[1], z], [e.L[0] + bx, e.L[1] + by, z], [e.R[0] + bx, e.R[1] + by, z], NX(CCOL.asphaltH));
+      }
+      legs = legs.filter((l) => !l.attach);
+      if (legs.length < 2) return;
+    }
+    const k = legs.length, E = legs.map((l) => this.legEnds(l)), z = N.z + 0.004;
     const poly = [];
     const lineX = (p, d, q, e) => { const den = d[0] * e[1] - d[1] * e[0]; if (Math.abs(den) < 1e-6) return null; const t = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / den; return [p[0] + d[0] * t, p[1] + d[1] * t, t]; };
     const corner = [];
     for (let i = 0; i < k; i++) {
-      const a = E[i], b = E[(i + 1) % k], gap = legs[i].gap;
+      const a = E[i], b = E[(i + 1) % k];
+      let gap = legs[(i + 1) % k].ang - legs[i].ang; if (gap <= 0) gap += TAU;
       poly.push(a.R, a.L);
       // 연석 곡선 — 다리 i 의 왼쪽 가장자리와 다리 i+1 의 오른쪽 가장자리
       const X = gap < 2.75 ? lineX(a.L, [Math.cos(a.u), Math.sin(a.u)], b.R, [Math.cos(b.u), Math.sin(b.u)]) : null;
@@ -274,6 +288,36 @@ const CScene = {
     }
   },
 
+  /** 고속 갈림목 — 본선 끝선과 램프 끝선 사이를 칠하고 흰 빗금(도류화), 코에는 충격 흡수대 */
+  gore(M, g) {
+    const pts = g.pts, z = 0.012, wht = NX(CCOL.white), asph = NX(CCOL.asphaltH);
+    let k = pts.length - 1;
+    while (k > 1 && pts[k].d > 7) k--;
+    for (let i = 0; i < k; i++) {
+      const a = pts[i], b = pts[i + 1];
+      M.quad([a.H[0], a.H[1], a.H[2] + 0.004], [b.H[0], b.H[1], b.H[2] + 0.004], [b.P[0], b.P[1], b.P[2] + 0.004], [a.P[0], a.P[1], a.P[2] + 0.004], asph);
+      // 빗금 — 4 m 마다, 본선 쪽에서 램프 쪽으로 진행 방향 비스듬히
+      if (i % 2 === 0 && a.d > 0.6) {
+        const ux = b.H[0] - a.H[0], uy = b.H[1] - a.H[1], L = Math.hypot(ux, uy) || 1, wx = ux / L * 0.45, wy = uy / L * 0.45;
+        const c = pts[Math.min(k, i + 2)];
+        M.quad([a.H[0], a.H[1], a.H[2] + z], [a.H[0] + wx, a.H[1] + wy, a.H[2] + z], [c.P[0] + wx, c.P[1] + wy, c.P[2] + z], [c.P[0], c.P[1], c.P[2] + z], wht);
+      }
+    }
+    // 끝선 둘 (본선 바깥 · 램프 안쪽) — 코까지 실선
+    for (const key of ['H', 'P']) for (let i = 0; i < k; i++) {
+      const a = pts[i][key], b = pts[i + 1][key], ux = b[0] - a[0], uy = b[1] - a[1], L = Math.hypot(ux, uy) || 1, nx = -uy / L * 0.1, ny = ux / L * 0.1;
+      M.quad([a[0] - nx, a[1] - ny, a[2] + z], [b[0] - nx, b[1] - ny, b[2] + z], [b[0] + nx, b[1] + ny, b[2] + z], [a[0] + nx, a[1] + ny, a[2] + z], wht);
+    }
+    // 코 — 충격 흡수대 (노랑 · 검정 띠) 와 그 뒤로 두 방호벽이 시작된다
+    if (g.nose) {
+      const n = g.nose, a = pts.find((p) => p.s >= n.s) || pts[k], ux = a.P[0] - a.H[0], uy = a.P[1] - a.H[1], L = Math.hypot(ux, uy) || 1;
+      const hx = -uy / L, hy = ux / L, s = g.div ? 1 : -1;      // 진행 방향 (분류면 노드에서 멀어지는 쪽)
+      for (let j = 0; j < 4; j++) {
+        const cx = n.x - hx * s * (j * 0.9 + 0.5), cy = n.y - hy * s * (j * 0.9 + 0.5);
+        M.box(cx - 0.45, cy - 0.45, n.z, cx + 0.45, cy + 0.45, n.z + 0.9, j % 2 ? '#1d1f22' : '#e8b820', 0, true);
+      }
+    }
+  },
   /** 막다른 길 끝 — 돌림 원 (바닥 · 둘레 보도) */
   culDeSac(M, N) {
     const l = N.legs[0], r = Math.max(l.wR, l.wL) + 3.5, z = N.z + 0.004, col = NX(CCOL.asphalt), k = 32;
@@ -320,6 +364,12 @@ const CScene = {
         if (t1 - t0 < 2) continue;
         const off = (t) => { let a = L.base; for (const o of L.slots) if (o.r < r) a += R.cl.LW * o.p(t); return a; };
         const fa = (t) => off(t) - 0.075, fb = (t) => off(t) + 0.075;
+        const aux = ln.type === 'acc' || ln.type === 'dec' || pv.type === 'acc' || pv.type === 'dec';
+        if (aux) {          // 가 · 감속 차로 경계 — 굵은 점선 (폭 30 cm, 3 m 칠 · 3 m 빔)
+          const ga = (t) => off(t) - 0.15, gb = (t) => off(t) + 0.15;
+          for (let t = t0; t < t1; t += 6) strip(t, Math.min(t + 3, t1), ga, gb, wht, 3);
+          continue;
+        }
         const solidFrom = ln.type !== 'thru' || pv.type !== 'thru' ? t0 : ctl ? Math.max(t0, t1 - 30) : t1;
         for (let t = t0; t < solidFrom; t += dash[0] + dash[1]) strip(t, Math.min(t + dash[0], solidFrom), fa, fb, wht, dash[0]);
         if (solidFrom < t1) strip(solidFrom, t1, fa, fb, wht, 3);

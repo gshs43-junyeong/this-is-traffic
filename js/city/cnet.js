@@ -244,6 +244,27 @@ function compileNet(map, opt) {
       if (lr.outN > 0 && !lr.divFrom) net.warn.push({ kind: 'ramp', road: lr.road.id, msg: '램프가 고속도로 진행 방향 오른쪽으로 갈라지지 않아 나갈 수 없습니다' });
     }
   }
+  /* ★ 램프 끝 — 노드(고속도로 중심선)가 아니라 그 방향 바깥 차로 바로 옆에서, 고속도로와 나란히 붙는다.
+     노드 중심에서 비스듬히 뻗으면 램프가 본선 차로를 가로지르고 차선 · 난간이 본선 위로 지나간다 */
+  for (const N of net.nodes) {
+    if (N.ctl !== 'merge') continue;
+    for (const lr of N.legs) {
+      const lh = lr.mergeTo || lr.divFrom; if (!lh) continue;
+      const H = lh.road, hc = H.cl, n = lr.mergeTo ? lh.outN : lh.inN;
+      const hdg = lr.mergeTo ? lh.ang : lh.ang + Math.PI;          // 그 방향 본선의 진행 방향
+      const off = (H.twoWay ? hc.med : -(n * hc.LW) / 2) + hc.LW * (n + 0.5);
+      const fx = Math.cos(hdg), fy = Math.sin(hdg), px = N.x + Math.sin(hdg) * off, py = N.y - Math.cos(hdg) * off;
+      const R = lr.road, P = R.g.P.map((q) => q.slice());
+      const ch = Math.hypot(P[3][0] - P[0][0], P[3][1] - P[0][1]), k = clamp(ch * 0.4, 40, 140);
+      if (lr.end === 'a') { P[0] = [px, py]; P[1] = [px + fx * k, py + fy * k]; }
+      else { P[3] = [px, py]; P[2] = [px - fx * k, py - fy * k]; }
+      const g = sampleBez(P); g.P = P;
+      g.z = zProfile(g, R.A.z, R.B.z, R.level);
+      R.g = g; R.L = g.L;
+      lr.ang = wrapPi(lr.end === 'a' ? g.h[0] : g.h[g.n - 1] + Math.PI);
+      lr.attach = { lh, hdg, off };
+    }
+  }
   // 끝 설정 (회전 전용 차로) — 그 노드로 들어가는 방향 몫
   const endCfg = (R, end) => R.ends[end] || {};
   // 방향 하나의 차로 칸 — [{type, r}] 안쪽부터
@@ -305,6 +326,7 @@ function compileNet(map, opt) {
       l.sb = l.sb + m;
       if (legs.length >= 3 && ctl !== 'merge') l.sb = Math.max(l.sb, wmax + 3 + (R.cl.sw ? CN.stopBack : 0));
       l.sb = Math.min(l.sb, ctl === 'merge' ? 75 : 45);
+      if (ctl === 'merge') l.sb = 2;
       if (legs.length === 2 && ctl === 'none' && l.next.gap > 2.75 && l.prev.gap > 2.75) l.sb = 0.5;
     }
   }
@@ -387,6 +409,7 @@ function compileNet(map, opt) {
     L.tt = L.len / L.vLim + (N.ctl === 'signal' ? 12 : N.ctl === 'stop' ? 6 : 0);
     L.ff = L.len / L.vLim;
   }
+  for (const N of net.nodes) if (N.ctl === 'merge') buildGores(net, N);
   // 게이트
   for (const N of net.nodes) {
     if (!N.gate) continue;
@@ -430,6 +453,51 @@ function mainComponent(links) {
   }
   let best = 0; for (let i = 1; i < size.length; i++) if (size[i] > size[best]) best = i;
   return new Set(links.filter((L) => comp[L.id] === best));
+}
+/** 고속 갈림목 — 램프 안쪽 끝선과 본선 바깥 차로 끝선 사이의 칠한 면(벌어짐 7 m 까지) · 난간이 없는 구간 */
+function buildGores(net, N) {
+  N.gores = [];
+  for (const lr of N.legs) {
+    if (!lr.attach) continue;
+    const lh = lr.attach.lh, div = !!lr.divFrom;
+    // 램프 옆을 나란히 가는 본선 구간 — 분류면 노드 뒤로 이어지는 본선, 합류면 노드 앞에서 오는 본선
+    const near = (a, b) => Math.abs(wrapPi(a - b)) < 0.6;
+    const hl = div ? N.legs.find((l) => l !== lh && l.road.cls === 'highway' && l.outLink && near(l.ang, lh.ang + Math.PI))
+      : N.legs.find((l) => l !== lh && l.road.cls === 'highway' && l.inLink && near(l.ang + Math.PI, lh.ang));
+    const HL = hl ? (div ? hl.outLink : hl.inLink) : null;
+    const RL = lr.road.links[0] || lr.road.links[1];
+    if (!HL || !RL) continue;
+    const o = {}, q = {}, pts = [];
+    let nose = null;
+    for (let s = 0; s <= Math.min(160, RL.len); s += 2) {
+      const t = div ? s : RL.len - s;                 // 노드에서 멀어지는 쪽으로
+      RL.center(t, o);
+      const ri = RL.base - 0.05;                       // 램프 안쪽(왼쪽) 끝선
+      const P = [o.x + Math.sin(o.h) * ri, o.y - Math.cos(o.h) * ri, o.z];
+      // 본선 위 가장 가까운 점 (노드에서 같은 거리쯤)
+      let best = null, bd = Infinity;
+      for (let u = Math.max(0, s - 30); u <= s + 30; u += 1) {
+        const th = div ? u : HL.len - u; if (th < 0 || th > HL.len) continue;
+        HL.center(th, q);
+        const e = HL.outer(th) + 0.05, H = [q.x + Math.sin(q.h) * e, q.y - Math.cos(q.h) * e, q.z];
+        const d = Math.hypot(H[0] - P[0], H[1] - P[1]);
+        if (d < bd) { bd = d; best = { H, th }; }
+      }
+      if (!best) break;
+      pts.push({ P, H: best.H, d: bd, s, th: best.th });
+      if (bd > 7) break;
+      if (!nose && bd > 4.5) nose = { x: (P[0] + best.H[0]) / 2, y: (P[1] + best.H[1]) / 2, z: P[2], s, th: best.th };
+    }
+    if (pts.length < 3) continue;
+    const end = nose || { s: pts[pts.length - 1].s, th: pts[pts.length - 1].th };
+    // 난간을 빼는 도로 역 구간 — 본선은 그 방향 오른쪽, 램프는 왼쪽
+    const hR = HL.road, rR = RL.road;
+    const hsc = (th) => (HL.d > 0 ? hR.sa + th : hR.L - hR.sb - th), rsc = (t) => (RL.d > 0 ? rR.sa + t : rR.L - rR.sb - t);
+    const th0 = div ? 0 : HL.len, th1 = end.th, t0 = div ? 0 : RL.len, t1 = div ? end.s : RL.len - end.s;
+    (hR.noBar = hR.noBar || []).push({ side: HL.d > 0 ? 1 : -1, a: Math.min(hsc(th0), hsc(th1)) - 2, b: Math.max(hsc(th0), hsc(th1)) + 2 });
+    (rR.noBar = rR.noBar || []).push({ side: RL.d > 0 ? -1 : 1, a: Math.min(rsc(t0), rsc(t1)) - 2, b: Math.max(rsc(t0), rsc(t1)) + 2 });
+    N.gores.push({ pts, nose, div });
+  }
 }
 /** 건물 주차 대수 — 용도 · 바닥 넓이 · 층수 */
 function bldCap(b) {
