@@ -1701,20 +1701,20 @@ const Scene = {
       const ox = sh * v.blink, oy = -ch * v.blink;          // 깜빡이는 쪽으로 향하는 단위 벡터
       const front = facing > 0;                              // 앞에서 보면 앞쪽 지시등, 뒤에서 보면 뒤쪽
       const ex = front ? bx : rearX, ey = front ? by : rearY, along = front ? 0.04 : -0.04;
-      const zB = front ? bz + zT * 0.9 : bz + zT + 0.20;    // 뒤쪽은 미등 바로 위에 얹어 겹치지 않게
+      const zB = front ? bz + zT * 0.9 : bz + zT + 0.14;    // 뒤쪽은 미등 바로 위에 얹어 겹치지 않게
       const lat = p.wid * 0.40;
       const lx = ex + ox * lat + ch * along, ly = ey + oy * lat + sh * along;
       if (dist < 110) {
-        const hwl = 0.24, hh = 0.11;
+        const hwl = 0.14, hh = 0.06;          // 미등(0.34 × 0.14 m)보다 살짝 작게
         const P = (dy, dz) => [lx + ox * dy, ly + oy * dy, zB + dz];
         this.quadPts(P(-hwl, -hh), P(hwl, -hh), P(hwl, hh), P(-hwl, hh), amber);
       } else {
         // 멀리서는 미등과 같은 비율로 — 화면 최소 크기를 두면 먼 차들까지 크게 번쩍여 시선을 빼앗았다
-        Render.mark(lx, ly, zB, size * 1.3, size * 0.8, amber);
+        Render.mark(lx, ly, zB, size * 0.95, size * 0.55, amber);
       }
       // 번짐 — 가까이에서만. 40 m 부터 옅어져 160 m 너머에서는 없다
       const gA = clamp(1 - (dist - 40) / 120, 0, 1);
-      if (gA > 0.02) Render.glow(lx, ly, zB, Math.max(size, 2.5 * px) * 4.2, '#ffc040', '#ffa82577', 0.95 * gA);
+      if (gA > 0.02) Render.glow(lx, ly, zB, size * 2.2, '#ffc040', '#ffa82566', 0.7 * gA);
     }
     // 전조등 — 우리를 향한 차만
     if (night && facing > 0) {
