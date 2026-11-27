@@ -553,7 +553,9 @@ const Scene = {
   /* ---------- 본체 ---------- */
   corridor(ctx, sc) {
     const rd = this.road, pal = this.pal;
-    const s0 = sc.sCam - 55, s1 = Math.min(rd.len, sc.sCam + Render.drawDist);
+    /* 관전 모드에서는 카메라가 어느 쪽이든 볼 수 있으므로 초점 앞뒤를 고르게 그린다. */
+    const s0 = sc.spectate ? Math.max(0, sc.sCam - sc.specR) : sc.sCam - 55;
+    const s1 = Math.min(rd.len, sc.sCam + (sc.spectate ? sc.specR : Render.drawDist));
     // 스트립 station 목록 (가까울수록 촘촘)
     const stations = [];
     /* ★ 단면은 세계 좌표 격자(4·8·16·32·64 m 의 배수)에 고정한다. 카메라 위치에서 세면
@@ -579,7 +581,10 @@ const Scene = {
     for (const corr of [sc.corrA, sc.corrB]) {
       if (!corr) continue;
       const sCamL = corr.dir > 0 ? sc.sCam : corr.L - sc.sCam;
-      const lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
+      let lo = sCamL - 420, hi = sCamL + Render.drawDist + 420;
+      if (sc.spectate) {   // 그리는 구간 [s0, s1] 을 이 차도의 국소 좌표로
+        lo = (corr.dir > 0 ? s0 : corr.L - s1) - 420; hi = (corr.dir > 0 ? s1 : corr.L - s0) + 420;
+      }
       const rampDrawLen = corr.rampLen + RAMP_VISUAL_EXTENSION;
       for (const r of corr.onRamps) if (r.s > lo && r.s - rampDrawLen < hi) near.push({ corr, s: r.s, on: 1 });
       for (const o of corr.offRamps) if (o.s + rampDrawLen > lo && o.s < hi) near.push({ corr, s: o.s, on: 0 });
@@ -619,8 +624,14 @@ const Scene = {
     const secs = new Array(stations.length);
     for (let i = 0; i < stations.length; i++) secs[i] = this.section(stations[i]);
 
-    // 먼 곳부터
-    for (let i = stations.length - 2; i >= 0; i--) {
+    // 먼 곳부터. 관전 시점은 초점 앞뒤 양쪽을 보므로 초점에서 먼 스트립부터 차례로 그린다.
+    const order = [];
+    for (let i = stations.length - 2; i >= 0; i--) order.push(i);
+    if (sc.spectate) {
+      const dOf = (i) => Math.abs(0.5 * (stations[i] + stations[i + 1]) - sc.sCam);
+      order.sort((p, q) => dOf(q) - dOf(p));
+    }
+    for (const i of order) {
       const a = secs[i], b = secs[i + 1];
       const d = Math.abs(stations[i] - sc.sCam);
       this.strip(ctx, a, b, d, sc);
@@ -638,7 +649,7 @@ const Scene = {
        인터체인지는 평탄하고 구조물이 없는 자리에만 놓이므로, 나중에 얹어도
        지형에 가려야 할 것을 잘못 덮을 일이 없다. */
     if (this.activeRamps && this.activeRamps.length) {
-      for (let i = stations.length - 2; i >= 0; i--) {
+      for (const i of order) {
         const d = Math.abs(stations[i] - sc.sCam);
         this.rampSurf(ctx, secs[i], secs[i + 1], d, sc);
       }

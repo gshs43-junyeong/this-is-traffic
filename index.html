@@ -61,7 +61,9 @@ body.gl #sky,body.gl #gl{display:block}
 
 /* 하단 지도 */
 #mapWrap{position:absolute;left:50%;transform:translateX(-50%);bottom:16px;padding:6px}
-#mapCv{display:block;border-radius:4px}
+#mapCv{display:block;border-radius:4px;pointer-events:auto;cursor:crosshair}
+body.spec #view{cursor:grab}
+body.spec #view:active{cursor:grabbing}
 #mapLegend{display:flex;gap:12px;justify-content:center;font-size:10.5px;color:var(--dim);margin-top:5px}
 #mapLegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 
@@ -146,7 +148,7 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
 
     <!-- 교통 상태 -->
     <div id="trafbox" class="card">
-      <h3>교통류 (반경 600m)</h3>
+      <h3 id="trafTitle">교통류 (반경 600m)</h3>
       <div class="row"><span class="k">서비스수준 LOS</span><span class="v"><span class="los los-" id="losV">-</span></span></div>
       <div class="row"><span class="k">밀도 k</span><span class="v"><span id="kV">—</span> 대/km/차로</span></div>
       <div class="row"><span class="k">교통량 q</span><span class="v"><span id="qV">—</span> 대/시/차로</span></div>
@@ -179,7 +181,8 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
     <div id="keys">
       <b>W/S</b> 가속·제동 &nbsp; <b>A/D</b> 조향 &nbsp; <b>Space</b> 급제동<br>
       <b>C</b> 시점 &nbsp; <b>P</b> 자율주행 &nbsp; <b>I</b> 사고 발생 &nbsp; <b>J</b> 유령정체 &nbsp; <b>R</b> 위치복귀<br>
-      <b>M</b> 지도 &nbsp; <b>X</b> 배속 &nbsp; <b>N</b> 소리 &nbsp; <b>Esc</b> 설정·분석
+      <b>M</b> 지도 &nbsp; <b>X</b> 배속 &nbsp; <b>N</b> 소리 &nbsp; <b>Esc</b> 설정·분석<br>
+      <b>V</b> 관전 (지도 클릭으로 지점 지정 · 드래그 회전 · 휠 확대 · W/S 이동 · <b>[ ]</b> 시설 이동)
     </div>
 
     <!-- 전 구간 지도 -->
@@ -192,12 +195,14 @@ button.primary{background:#1e4d38;border-color:var(--acc);color:#d7f5e6;font-wei
         <span><i style="background:#3a3550"></i>터널</span>
         <span><i style="background:#2f4550"></i>교량</span>
         <span><i style="background:#fff"></i>내 차</span>
+        <span><i style="background:#4fd1ff"></i>관전 지점 (클릭)</span>
       </div>
     </div>
 
     <div id="tools">
       <button data-act="auto">자율주행 (P)</button>
       <button data-act="cam">시점 전환 (C)</button>
+      <button data-act="spectate">관전 모드 (V)</button>
       <button data-act="incident">사고 발생 (I)</button>
       <button data-act="phantomjam">유령정체 (J)</button>
       <button data-act="speed">배속 ×1</button>

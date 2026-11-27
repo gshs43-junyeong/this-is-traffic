@@ -16,7 +16,7 @@ const UI = {
     this.app = app;
     const ids = ['hud', 'spd', 'spdUnit', 'gaugeArc', 'limitSign', 'stn', 'nextIC', 'gradeV', 'curveV',
       'structV', 'laneV', 'losV', 'kV', 'qV', 'vV', 'delayV', 'ttiV', 'nvehV', 'clockV', 'msg',
-      'panel', 'stats', 'fdCv', 'stCv', 'stLane', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList', 'incbox'];
+      'panel', 'stats', 'fdCv', 'stCv', 'stLane', 'mapCv', 'btnMenu', 'btnClose', 'toast', 'incList', 'incbox', 'trafTitle'];
     for (const id of ids) this.el[id] = document.getElementById(id);
     this.bindControls();
     this.toastT = 0;
@@ -93,8 +93,13 @@ const UI = {
   update(dt) {
     const app = this.app, p = app.player, c = app.corrA;
     if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) this.el.toast.classList.remove('on'); }
+    // 관전 중이면 도로·교통 정보는 관전 지점 기준, 속도계는 그 지점 평균속도
+    const sp = app.spec, fs = sp ? sp.s : p.s;
+    const st = c.localState(fs, sp ? 300 : 600);
 
-    const v = p.v * MS2K;
+    const v = sp ? (isFinite(st.v) ? st.v : 0) : p.v * MS2K;
+    const unit = sp ? 'km/h · 지점 평균' : 'km/h';
+    if (this.el.spdUnit.textContent !== unit) this.el.spdUnit.textContent = unit;
     this.el.spd.textContent = Math.round(v);
     // 속도계 원호
     const frac = clamp(v / 200, 0, 1);
@@ -102,24 +107,25 @@ const UI = {
     this.el.gaugeArc.style.stroke = v > app.cfg.limit + 22 ? '#e2574c' : v > app.cfg.limit + 2 ? '#e0a63a' : '#5fc48f';
     this.el.limitSign.textContent = app.cfg.limit;
 
-    const g = c.geo(p.s);
-    const grade = c.gradeAt(p.s) * 100;
+    const g = c.geo(fs);
+    const grade = c.gradeAt(fs) * 100;
     const R = Math.abs(g.kap) > 1e-6 ? 1 / Math.abs(g.kap) : Infinity;
-    this.el.stn.textContent = fmt1(p.s / 1000) + ' km';
+    this.el.stn.textContent = (sp ? '관전 ' : '') + fmt1(fs / 1000) + ' km';
     this.el.gradeV.textContent = (grade >= 0 ? '+' : '') + fmt1(grade) + '%';
     this.el.gradeV.style.color = Math.abs(grade) > 2.5 ? '#e0a63a' : '';
     this.el.curveV.textContent = isFinite(R) ? 'R ' + fmt0(R) + 'm' : '직선';
-    const si = app.road.structInfo(c.roadS(p.s));
-    this.el.structV.textContent = si ? si.name : (c.auxAt(p.s) ? '부가차로' : '토공');
+    const si = app.road.structInfo(c.roadS(fs));
+    this.el.structV.textContent = si ? si.name : (c.auxAt(fs) ? '부가차로' : '토공');
     this.el.structV.className = 'v ' + (si ? (si.type === 'tunnel' ? 'tun' : 'brg') : '');
-    const ic = c.nextIC(p.s);
-    this.el.nextIC.textContent = ic ? ic.name + '  ' + distStr(ic.s - p.s) : '—';
-    this.el.laneV.textContent = (p.lane === c.nLane ? '부가' : (p.lane + 1) + '차로') +
-      (p.offRoad ? ' · 갓길!' : '');
-    this.el.laneV.style.color = p.offRoad ? '#e2574c' : '';
+    const ic = c.nextIC(fs);
+    this.el.nextIC.textContent = ic ? ic.name + '  ' + distStr(ic.s - fs) : '—';
+    this.el.laneV.textContent = sp ? '내 차 ' + fmt1(p.s / 1000) + ' km (자율)' :
+      (p.lane === c.nLane ? '부가' : (p.lane + 1) + '차로') + (p.offRoad ? ' · 갓길!' : '');
+    this.el.laneV.style.color = !sp && p.offRoad ? '#e2574c' : '';
+    const tt = sp ? '교통류 (관전 지점 반경 300m)' : '교통류 (반경 600m)';
+    if (this.el.trafTitle && this.el.trafTitle.textContent !== tt) this.el.trafTitle.textContent = tt;
 
     // 주변 교통 상태
-    const st = c.localState(p.s, 600);
     this.el.kV.textContent = isFinite(st.k) ? fmt1(st.k) : '—';
     this.el.vV.textContent = isFinite(st.v) ? fmt0(st.v) : '—';
     const los = losOf(st.kp);
@@ -127,7 +133,7 @@ const UI = {
     this.el.losV.className = 'los los' + los;
     // 가장 가까운 검지기 유량
     let near = null, bd = 1e9;
-    for (const d of c.dets) { const dd = Math.abs(d.s - p.s); if (dd < bd) { bd = dd; near = d; } }
+    for (const d of c.dets) { const dd = Math.abs(d.s - fs); if (dd < bd) { bd = dd; near = d; } }
     const h = near && near.hist.length ? near.hist[near.hist.length - 1] : null;
     this.el.qV.textContent = h ? fmt0(h.q / c.nLane) : '—';
 
@@ -144,7 +150,7 @@ const UI = {
     if (app.frame % 20 === 0) {
       const rows = [];
       for (const inc of c.incidents) {
-        const d = inc.s - p.s;
+        const d = inc.s - fs;
         rows.push('<li class="' + (inc.lane < 0 ? 'sh' : 'bk') + '">' + inc.kind +
           ' · ' + (inc.lane < 0 ? '갓길' : (inc.lane + 1) + '차로') +
           ' · ' + (d > 0 ? '전방 ' + distStr(d) : '후방 ' + distStr(-d)) +
@@ -188,6 +194,14 @@ const UI = {
     // 플레이어 위치 표시
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x(app.player.s), 0); ctx.lineTo(x(app.player.s), H); ctx.stroke();
+    // 관전 지점 — 하늘색 세로선과 위아래 삼각형
+    if (app.spec) {
+      const xs = x(app.spec.s);
+      ctx.strokeStyle = '#4fd1ff'; ctx.fillStyle = '#4fd1ff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(xs, 0); ctx.lineTo(xs, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(xs - 5, 0); ctx.lineTo(xs + 5, 0); ctx.lineTo(xs, 6); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(xs - 5, H); ctx.lineTo(xs + 5, H); ctx.lineTo(xs, H - 6); ctx.closePath(); ctx.fill();
+    }
   },
 
   /* ---------- 분석 도표 ---------- */
