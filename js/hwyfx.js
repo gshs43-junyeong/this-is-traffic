@@ -87,10 +87,14 @@ const HwyFx = {
     for (const site of this.sites) {
       const t = site.inf.type; if (t === 'jct') continue;
       const corr = site.corr, o = this.outer(corr, site.s);
-      const [u0, u1, ha] = t === 'rest' ? [o.u - 6, o.u + 84, 250] : [o.u - 18, o.u + 18, 45];
-      const c = this.P(corr, o.s, (u0 + u1) / 2, o.dz), f = this.P(corr, o.s + 1, (u0 + u1) / 2, o.dz);
-      const fx = f[0] - c[0], fy = f[1] - c[1], L = Math.hypot(fx, fy) || 1;
-      pads.push({ x: c[0], y: c[1], z: c[2] - 0.7, fx: fx / L, fy: fy / L, ha, hc: (u1 - u0) / 2 });
+      // 휴게소: 주차장 · 건물 / 영업소: 접속로 · 요금소 광장 · 사무실, 그리고 일반국도 띠
+      const z = this.P(corr, o.s, o.u, o.dz)[2] - 0.7;
+      const boxes = t === 'rest' ? [[o.u - 6, o.u + 84, 250]] : [[o.u - 6, o.u + this.TOLL.vRoad - 4, 70], [o.u + this.TOLL.vRoad - 14, o.u + this.TOLL.vRoad + 14, 540]];
+      for (const [u0, u1, ha] of boxes) {
+        const c = this.P(corr, o.s, (u0 + u1) / 2, 0), f = this.P(corr, o.s + 1, (u0 + u1) / 2, 0);
+        const fx = f[0] - c[0], fy = f[1] - c[1], L = Math.hypot(fx, fy) || 1;
+        pads.push({ x: c[0], y: c[1], z, fx: fx / L, fy: fy / L, ha, hc: (u1 - u0) / 2 });
+      }
     }
     rd.pads = pads;
     rd.terrain = (x, y) => {
@@ -119,7 +123,7 @@ const HwyFx = {
     this.sync(sc);
     const night = sc.timeOfDay === 'night', dusk = sc.timeOfDay === 'dusk';
     this.bright = night ? 0.62 : dusk ? 0.8 : 1;       // 반사지 — 밤에도 전조등에 꽤 밝다
-    this.ctx = ctx; this.sc = sc;
+    this.ctx = ctx; this.sc = sc; this._crossDone = new Set();
     for (const site of this.sites) {
       const corr = site.corr;
       const sr = corr.roadS(site.s), d0 = Math.abs(sr - sc.sCam);
@@ -128,12 +132,17 @@ const HwyFx = {
       this.signs(site, t);
       if (d0 < 2200) {
         if (t === 'rest') this.restArea(site);
-        else if (t === 'jct') this.jctFlyover(site);
+        else if (t === 'jct') this.jct(site);
         else this.tollPlaza(site);
       }
     }
   },
   /** 그 자리가 지금 그릴 만큼 가깝고 앞에 있나 */
+  /** 카메라에서 그 자리까지 거리 (앞뒤 상관없이) — 넓게 퍼진 시설은 조각마다 따로 가린다 */
+  dist(corr, s, u, lim) {
+    const p = this.P(corr, s, u, 3), d = Math.hypot(p[0] - Render.cx, p[1] - Render.cy, p[2] - Render.cz);
+    return d < lim ? Math.max(1, Render.depth(p[0], p[1], p[2])) : -1;
+  },
   near(corr, s, lim) {
     const p = this.P(corr, s, 6, 3), d = Render.depth(p[0], p[1], p[2]);
     return d > -30 && d < (lim || Render.drawDist + 200) ? d : -1;
@@ -238,66 +247,349 @@ const HwyFx = {
   /* ----- 시설 ----- */
   /** 고리 바깥 접속점 (국소 s, u) — 나가는 램프와 들어오는 램프가 만나는 곳 */
   outer(corr, S) { return { s: S + RAMP_LEN, u: corr.rampLat(RAMP_LEN), dz: corr.rampDz(RAMP_LEN) }; },
-  /** 나들목 영업소 — 바깥 접속점 지붕 · 부스 · 바깥으로 나가는 지방도 */
-  tollPlaza(site) {
-    const corr = site.corr, o = this.outer(corr, site.s), d = this.near(corr, o.s, 2200); if (d < 0) return;
-    const ctx = this.ctx;
-    // 지방도 — 바깥 접속점에서 바깥으로 곧게 (지형을 따라)
-    const p0 = this.P(corr, o.s, o.u + 3, o.dz), p1 = this.P(corr, o.s, o.u + 4, o.dz);
-    const ox = p1[0] - p0[0], oy = p1[1] - p0[1], ol = Math.hypot(ox, oy) || 1, nx = ox / ol, ny = oy / ol, tx = -ny, ty = nx;
-    const rd = this.road, ground = (x, y) => Math.max(rd.terrain(x, y), rd.waterZ) + 0.12;
-    const asph = Scene.haze('#55575b', d), line = Scene.haze('#e2b93b', d);
-    let prev = null;
-    for (let k = 0; k <= 16; k++) {
-      const x = p0[0] + nx * (k * 25), y = p0[1] + ny * (k * 25), z = k < 2 ? p0[2] + (ground(x, y) - p0[2]) * k / 2 : ground(x, y);
-      const cur = [x, y, z];
-      if (prev) {
-        Scene.quad([prev[0] - tx * 4, prev[1] - ty * 4, prev[2]], [cur[0] - tx * 4, cur[1] - ty * 4, cur[2]], [cur[0] + tx * 4, cur[1] + ty * 4, cur[2]], [prev[0] + tx * 4, prev[1] + ty * 4, prev[2]], asph);
-        Scene.quad([prev[0] - tx * 0.12, prev[1] - ty * 0.12, prev[2] + 0.02], [cur[0] - tx * 0.12, cur[1] - ty * 0.12, cur[2] + 0.02], [cur[0] + tx * 0.12, cur[1] + ty * 0.12, cur[2] + 0.02], [prev[0] + tx * 0.12, prev[1] + ty * 0.12, prev[2] + 0.02], line);
-      }
-      prev = cur;
-    }
-    // 영업소 — 램프 위를 건너는 지붕 (기둥 넷) · 부스 셋
-    const s0 = o.s - 30, w = 12, g = rd.at(corr.roadS(s0));
-    for (const du of [-w, -w / 3, w / 3, w]) { const a = this.P(corr, s0, o.u + du, o.dz); Scene.box(ctx, a[0], a[1], a[2], g.hdg, 0.6, 0.6, 5.6, 0, '#c9ccc8', 1, d, false); }
-    const c1 = this.P(corr, s0, o.u, o.dz + 5.6);
-    Scene.box(ctx, c1[0], c1[1], c1[2], g.hdg, 9, w * 2 + 2, 1.0, 0, '#eceee9', 1, d, false);
-    for (const du of [-w * 2 / 3, 0, w * 2 / 3]) { const a = this.P(corr, s0, o.u + du, o.dz); Scene.box(ctx, a[0], a[1], a[2], g.hdg, 5, 1.6, 2.6, 0, '#d8dad6', 1, d, false); Scene.box(ctx, a[0], a[1], a[2] + 2.6, g.hdg, 5.4, 2.0, 0.25, 0, '#2b6fb3', 1, d, false); }
-    // 지붕 앞 이름 띠 (오는 차 쪽)
-    this.panel(corr, s0 - 4.6, o.u, o.dz + 5.65, w * 2 + 1.6, 0.95, `toll:${site.name}`, () => this.texToll(site), d);
+  /** 국소 (s, u) 점들 → 진행 방향을 단 세계 점들 { x, y, z, dx, dy } (z 는 zf(i, 점) 로) */
+  path(corr, su, zf) {
+    const P = su.map(([s, u]) => this.P(corr, s, u, 0));
+    return P.map((p, i) => {
+      const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)];
+      const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+      return { x: p[0], y: p[1], z: zf(i, p), dx: dx / L, dy: dy / L };
+    });
   },
-  /** 분기점 연결로 — 바깥 접속점에서 다른 고속도로 쪽으로 휘며 올라가는 고가 (2 차로 · 난간 · 교각) */
-  jctFlyover(site) {
-    const corr = site.corr, o = this.outer(corr, site.s), d = this.near(corr, o.s, 2400); if (d < 0) return;
-    const ctx = this.ctx, rd = this.road;
-    const p0 = this.P(corr, o.s, o.u, o.dz), pf = this.P(corr, o.s + 1, o.u, o.dz), po = this.P(corr, o.s, o.u + 1, o.dz);
-    let fx = pf[0] - p0[0], fy = pf[1] - p0[1]; const fl = Math.hypot(fx, fy); fx /= fl; fy /= fl;
-    let rx = po[0] - p0[0], ry = po[1] - p0[1]; const rl = Math.hypot(rx, ry); rx /= rl; ry /= rl;
-    const R = 220, ang = Math.PI * 0.55, n = 40, pts = [];
-    for (let i = 0; i <= n; i++) {        // 바깥 쪽으로 도는 원호 다음 곧은 길
-      const a = ang * Math.min(1, i / (n * 0.6)), straight = Math.max(0, i / n - 0.6) * 900;
-      const cx = p0[0] + rx * R, cy = p0[1] + ry * R;
-      const x0 = cx - rx * R * Math.cos(a) + fx * R * Math.sin(a), y0 = cy - ry * R * Math.cos(a) + fy * R * Math.sin(a);
-      const dx = rx * Math.sin(a) + fx * Math.cos(a), dy = ry * Math.sin(a) + fy * Math.cos(a);
-      const x = x0 + dx * straight, y = y0 + dy * straight, z = p0[2] + 11 * smoothstep(i / (n * 0.55));
-      pts.push({ x, y, z, dx, dy });
+  /** 점 p 에서 진행 방향 오른쪽으로 off 만큼 */
+  side(p, off, dz) { return [p.x + p.dy * off, p.y - p.dx * off, p.z + (dz || 0)]; },
+  ground(x, y) { return Math.max(this.road.terrain(x, y), this.road.waterZ); },
+  /**
+   * 길 한 줄 — 노면(왼쪽 wl · 오른쪽 wr), 노면 표시, 난간, 그리고 땅과의 사이(성토 비탈 또는 교량 거더 · 교각).
+   * o: { marks: [[off, w, color, dash]], par: [왼쪽, 오른쪽], parSkip(i, side), surf(i) 노면색, pierEvery }
+   */
+  strip(pts, wl, wr, o, d) {
+    const ctx = this.ctx, night = this.sc.timeOfDay === 'night', pierC = '#b9b6ad';
+    let run = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y); run += seg;
+      const depth = Render.depth(a.x, a.y, a.z);
+      if (depth < -60 || depth > Render.drawDist + 300) continue;
+      d = Math.max(1, Math.hypot(a.x - Render.cx, a.y - Render.cy, a.z - Render.cz));   // 안개는 이 조각까지의 거리로
+      const asph = Scene.haze(night ? '#2c2c30' : '#4b4c50', d), bar = Scene.haze('#cfcdc4', d), deck = Scene.haze('#a9a69d', d), fillC = Scene.haze('#6d7f4b', d);
+      const surf = o.surf ? Scene.haze(o.surf(i), d) : asph;
+      Scene.quad(this.side(a, -wl), this.side(b, -wl), this.side(b, wr), this.side(a, wr), surf);
+      for (const [off, w, col, dash] of o.marks || []) {
+        if (dash && (Math.floor(run / dash) % 2)) continue;
+        const c = Scene.haze(col, d);
+        Scene.quad(this.side(a, off - w / 2, 0.03), this.side(b, off - w / 2, 0.03), this.side(b, off + w / 2, 0.03), this.side(a, off + w / 2, 0.03), c);
+      }
+      const forced = o.bridge && o.bridge(i);
+      if (forced) Scene.quad(this.side(a, -wl, -1.8), this.side(b, -wl, -1.8), this.side(b, wr, -1.8), this.side(a, wr, -1.8), Scene.haze('#8f8c84', d));
+      for (const [k, off] of [[0, -wl], [1, wr]]) {
+        const e0 = this.side(a, off), e1 = this.side(b, off);
+        const g0 = this.ground(e0[0], e0[1]), g1 = this.ground(e1[0], e1[1]);
+        const h = Math.min(a.z - g0, b.z - g1);
+        if (h > 2.6 || forced) {      // 교량 — 거더 옆면 (두께 1.8 m)
+          Scene.quad([e0[0], e0[1], e0[2] - 1.8], [e1[0], e1[1], e1[2] - 1.8], e1, e0, deck);
+        } else if ((a.z > g0 + 0.05 || b.z > g1 + 0.05) && !(o.noFill && o.noFill(i))) {   // 성토 — 1 : 1.5 비탈로 땅까지
+          const s = off < 0 ? -1 : 1, w0 = Math.max(0, a.z - g0) * 1.5 + 0.5, w1 = Math.max(0, b.z - g1) * 1.5 + 0.5;
+          const f0 = this.side(a, off + s * w0), f1 = this.side(b, off + s * w1);
+          f0[2] = this.ground(f0[0], f0[1]) - 0.2; f1[2] = this.ground(f1[0], f1[1]) - 0.2;
+          Scene.quad(e0, e1, f1, f0, fillC);
+        }
+        if ((o.par || [])[k] && !(o.parSkip && o.parSkip(i, k))) {
+          Scene.quad(e0, e1, [e1[0], e1[1], e1[2] + 1.0], [e0[0], e0[1], e0[2] + 1.0], bar);
+        }
+      }
+      // 교각 — 땅에서 높이 뜬 곳에만
+      const pe = o.pierEvery || 3;
+      if (i % pe === 1) {
+        const gz = this.ground(a.x, a.y);
+        if (a.z - gz > 3 && !(o.noPier && o.noPier(i))) {
+          const hd = Math.atan2(a.dy, a.dx);
+          for (const off of o.piers || [0]) {
+            const q = this.side(a, off);
+            Scene.box(ctx, q[0], q[1], gz, hd, 1.8, 1.8, a.z - 1.5 - gz, 0, pierC, 1, d, true);
+          }
+          const c = this.side(a, (wr - wl) / 2);
+          Scene.box(ctx, c[0], c[1], a.z - 2.6, hd + Math.PI / 2, wl + wr - 1, 1.6, 1.1, 0, pierC, 1, d, false);
+        }
+      }
     }
-    const asph = Scene.haze(shade(this.sc.timeOfDay === 'night' ? '#2c2c30' : '#4a4a4d', 1), d), deck = Scene.haze('#b7b4ac', d), bar = Scene.haze('#d2d0c8', d), wh = Scene.haze('#eceee6', d);
+  },
+
+  /* ----- 나들목 영업소 -----
+     바깥 접속점(O)에서 지방도 쪽으로 곧게 나가는 접속로 — 나가는 차는 우회전으로 들어가고, 들어오는 차는
+     우회전으로 램프에 붙는다(T 자 + 곡선 둘). 접속로는 요금소 앞뒤로 넓어져 섬 · 부스 · 지붕이 서고,
+     끝에서 일반국도와 신호 교차로로 만난다. 모두 국소 (s, u) 로 놓는다 — 본선과 직각인 방향이 +u. */
+  TOLL: { nOut: 4, nIn: 3, hp: [2, 1], lane: 3.5, isl: 2.0, med: 1.0, v0: 125, vRoad: 300 },
+  tollLanes() {
+    const T = this.TOLL, out = [], inn = [];
+    let e = T.med;                                  // 나가는 쪽(-s): 가운데 섬에서 바깥으로
+    for (let i = 0; i < T.nOut; i++) { out.push(-(e + T.lane / 2)); e += T.lane + T.isl; }
+    const wOut = e;
+    e = T.med;
+    for (let i = 0; i < T.nIn; i++) { inn.push(e + T.lane / 2); e += T.lane + T.isl; }
+    return { out, inn, wOut, wIn: e };
+  },
+  tollPlaza(site) {
+    const corr = site.corr, o = this.outer(corr, site.s), d = this.dist(corr, o.s, o.u + 150, 2400); if (d < 0) return;
+    const ctx = this.ctx, rd = this.road, T = this.TOLL, z0 = this.P(corr, o.s, o.u, o.dz)[2] + 0.03;
+    const night = this.sc.timeOfDay === 'night', g = rd.at(corr.roadS(o.s)), hdg = g.hdg + (corr.dir < 0 ? Math.PI : 0);
+    const sC = o.s, uO = o.u, L = this.tollLanes(), V = (v) => uO + v;
+    const W = (k) => this.P(corr, k[0], k[1], 0).slice(0, 2).concat([z0 + (k[2] || 0)]);
+    const Q = (a, b, c, e, col) => Scene.quad(W(a), W(b), W(c), W(e), Scene.haze(col, d));
+    const asphC = night ? '#2f3034' : '#4e4f53', concC = night ? '#55554f' : '#9d9b93';
+    // 접속로 반폭 — 접속로 8 m, 요금소 앞뒤로 넓어진다
+    const half = (v, side) => {
+      const wide = side < 0 ? L.wOut + 0.6 : L.wIn + 0.6;
+      const k = smoothstep((v - (T.v0 - 75)) / 50) * (1 - smoothstep((v - (T.v0 + 25)) / 50));
+      return 8 + (wide - 8) * k;
+    };
+    const vs = []; for (let v = 3; v <= T.vRoad - 6; v += 5) vs.push(v);
+    for (let i = 0; i + 1 < vs.length; i++) {
+      const a = vs[i], b = vs[i + 1], plaza = a >= T.v0 - 28 && b <= T.v0 + 28;
+      const col = plaza ? concC : asphC;
+      Q([sC - half(a, -1), V(a)], [sC - half(b, -1), V(b)], [sC + half(b, 1), V(b)], [sC + half(a, 1), V(a)], col);
+      for (const sd of [-1, 1]) {      // 가장자리 — 땅으로 내려가는 얕은 옆면
+        const ea = sC + sd * half(a, sd), eb = sC + sd * half(b, sd);
+        Q([ea, V(a)], [eb, V(b)], [eb, V(b), -1.2], [ea, V(a), -1.2], '#6d7f4b');
+      }
+    }
+    // 램프에 붙는 곡선 둘 (나가는 차 · 들어오는 차 모두 우회전) — 모서리를 부채꼴로 채운다
+    const R = 22;
+    for (const sd of [-1, 1]) {
+      const cs = sC + sd * (8 + R), cu = uO + 3.3 + R;
+      for (let k = 0; k < 8; k++) {
+        const a0 = Math.PI / 2 * k / 8, a1 = Math.PI / 2 * (k + 1) / 8;
+        const p0 = [cs - sd * R * Math.cos(a0), cu - R * Math.sin(a0)], p1 = [cs - sd * R * Math.cos(a1), cu - R * Math.sin(a1)];
+        Q([sC + sd * 8, uO + 3.3], p0, p1, [sC + sd * 8, uO + 3.3], asphC);
+        Q(p0, p1, [p1[0], uO + 3.3], [p0[0], uO + 3.3], asphC);
+      }
+    }
+    // 노면 표시 — 가운데 노란 겹선, 차로 점선, 하이패스 파란 유도선
+    const line = (s0, v0, s1, v1, w, col) => {
+      const dx = s1 - s0, dv = v1 - v0, l = Math.hypot(dx, dv) || 1, nx = -dv / l * w / 2, nv = dx / l * w / 2;
+      Q([s0 + nx, V(v0) + nv, 0.03], [s1 + nx, V(v1) + nv, 0.03], [s1 - nx, V(v1) - nv, 0.03], [s0 - nx, V(v0) - nv, 0.03], col);
+    };
+    for (const [v0, v1] of [[6, T.v0 - 50], [T.v0 + 50, T.vRoad - 8]]) {
+      line(sC - 0.2, v0, sC - 0.2, v1, 0.15, '#e2b93b'); line(sC + 0.2, v0, sC + 0.2, v1, 0.15, '#e2b93b');
+      for (const sd of [-1, 1]) for (let v = v0; v < v1 - 3; v += 9) line(sC + sd * 4, v, sC + sd * 4, v + 4.5, 0.15, '#eceee6');
+    }
+    for (let i = 0; i < T.hp[0]; i++) line(sC + L.out[i], T.v0 - 70, sC + L.out[i], T.v0 + 14, 0.35, '#1f6fe0');
+    for (let i = 0; i < T.hp[1]; i++) line(sC + L.inn[i], T.v0 + 70, sC + L.inn[i], T.v0 - 14, 0.35, '#1f6fe0');
+    // 섬 · 부스 · 충격흡수대
+    const islands = [0];
+    let e = T.med; for (let i = 0; i < T.nOut; i++) { e += T.lane; islands.push(-(e + T.isl / 2)); e += T.isl; }
+    e = T.med; for (let i = 0; i < T.nIn; i++) { e += T.lane; islands.push(e + T.isl / 2); e += T.isl; }
+    const P3 = (s, v, dz) => { const p = this.P(corr, s, V(v), 0); return [p[0], p[1], z0 + (dz || 0)]; };
+    for (const c of islands) {
+      const w = c === 0 ? T.med * 2 : T.isl, m = P3(sC + c, T.v0);
+      Scene.box(ctx, m[0], m[1], m[2], hdg + Math.PI / 2, 30, w, 0.28, 0, '#c9c6bd', 1, d, false);
+      for (const v of [T.v0 - 15.5, T.v0 + 15.5]) {
+        const q = P3(sC + c, v);
+        Scene.box(ctx, q[0], q[1], q[2], hdg + Math.PI / 2, 1.4, w * 0.8, 1.0, 0, '#e8b90c', 1, d, false);
+        Scene.box(ctx, q[0], q[1], q[2] + 0.35, hdg + Math.PI / 2, 1.42, w * 0.82, 0.25, 0, '#1d1d1d', 1, d, false);
+      }
+      if (c !== 0) {
+        const b = P3(sC + c, T.v0 - 2);
+        Scene.box(ctx, b[0], b[1], b[2] + 0.28, hdg + Math.PI / 2, 3.0, 1.5, 2.5, 0, '#eeeeea', 1, d, false);
+        Scene.box(ctx, b[0], b[1], b[2] + 1.35, hdg + Math.PI / 2, 3.04, 1.54, 0.8, 0, '#3a4a5a', 1, d, false);
+      }
+    }
+    // 지붕 — 기둥은 섬 위, 앞뒤 면에 이름 띠와 차로 표지
+    const sL = sC - L.wOut - 1.2, sR = sC + L.wIn + 1.2, zr = 6.4, hr = 1.7, dep = 13;
+    for (const c of islands) for (const v of [T.v0 - dep / 2 + 1.2, T.v0 + dep / 2 - 1.2]) {
+      const q = P3(sC + c, v); Scene.box(ctx, q[0], q[1], q[2], hdg, 0.7, 0.7, zr, 0, '#d9dad6', 1, d, false);
+    }
+    const mid = P3((sL + sR) / 2, T.v0);
+    Scene.box(ctx, mid[0], mid[1], mid[2] + zr, hdg, sR - sL, dep, hr, 0, '#eef0ec', 1, d, false);
+    const face = (v, back) => {
+      const a = back ? P3(sL, v, zr) : P3(sR, v, zr), b = back ? P3(sR, v, zr) : P3(sL, v, zr);
+      this.panelFree(a, b, hr, `tollf:${site.name}:${back ? 1 : 0}`, () => this.texTollFace(site, back), d);
+    };
+    face(T.v0 - dep / 2 - 0.06, false);     // 나가는 차(+u 로 오는 차)가 보는 면
+    face(T.v0 + dep / 2 + 0.06, true);      // 들어오는 차가 보는 면
+    // 영업소 사무실 — 나가는 쪽 바깥
+    const bo = P3(sL - 18, T.v0 + 10);
+    Scene.box(ctx, bo[0], bo[1], bo[2], hdg, 20, 13, 7.2, 0, '#d8d4c8', 1, d, false);
+    Scene.box(ctx, bo[0], bo[1], bo[2] + 2.2, hdg, 20.1, 13.1, 1.1, 0, '#4a5b6c', 1, d, false);
+    Scene.box(ctx, bo[0], bo[1], bo[2] + 7.2, hdg, 21, 14, 0.5, 0, '#5d6066', 1, d, false);
+    Q([sL - 30, V(T.v0 - 22)], [sL - 30, V(T.v0 - 2)], [sL - 6, V(T.v0 - 2)], [sL - 6, V(T.v0 - 22)], asphC);
+    for (let k = 0; k < 4; k++) { const q = P3(sL - 26 + k * 6, T.v0 - 12); Scene.box(ctx, q[0], q[1], q[2], hdg + Math.PI / 2, 4.4, 1.8, 1.45, 0, ['#e6e8ea', '#202226', '#8b9198', '#9c2b2b'][k], 1, d, false); }
+    // 일반국도 — 본선과 나란히, 접속로와 T 자 신호 교차로
+    const vr = T.vRoad, hw = 7.5;
+    for (let s = sC - 520; s < sC + 520; s += 20) {
+      Q([s, V(vr - hw)], [s + 20, V(vr - hw)], [s + 20, V(vr + hw)], [s, V(vr + hw)], asphC);
+      Q([s, V(vr + hw)], [s + 20, V(vr + hw)], [s + 20, V(vr + hw), -1.2], [s, V(vr + hw), -1.2], '#6d7f4b');
+      if (Math.abs(s + 10 - sC) > 12) Q([s, V(vr - hw)], [s + 20, V(vr - hw)], [s + 20, V(vr - hw), -1.2], [s, V(vr - hw), -1.2], '#6d7f4b');
+      line(s, vr - 0.2, s + 20, vr - 0.2, 0.15, '#e2b93b'); line(s, vr + 0.2, s + 20, vr + 0.2, 0.15, '#e2b93b');
+      if (Math.abs(s + 10 - sC) > 14) for (const sd of [-1, 1]) { line(s, vr + sd * 3.7, s + 10, vr + sd * 3.7, 0.15, '#eceee6'); line(s, vr + sd * (hw - 0.4), s + 20, vr + sd * (hw - 0.4), 0.15, '#eceee6'); }
+    }
+    line(sC - 8, vr - hw - 1.5, sC, vr - hw - 1.5, 0.45, '#eceee6');     // 정지선
+    // 신호등 — 교차로 모서리 기둥 · 팔 · 등
+    const sp = P3(sC - 9.5, vr - hw - 2), sa = P3(sC - 4, vr - hw - 2, 6.2);
+    Scene.box(ctx, sp[0], sp[1], sp[2], hdg, 0.32, 0.32, 6.4, 0, '#7d848a', 1, d, false);
+    Scene.box(ctx, (sp[0] + sa[0]) / 2, (sp[1] + sa[1]) / 2, sa[2], hdg, 5.6, 0.2, 0.2, 0, '#7d848a', 1, d, false);
+    Scene.box(ctx, sa[0], sa[1], sa[2] - 0.5, hdg, 1.4, 0.4, 0.5, 0, '#1b1d20', 1, d, false);
+    // 지방도 방향 표지 — 교차로 앞, 파란 국도 번호와 좌우 갈 곳
+    const sg = P3(sC + 9.5, vr - hw - 6);
+    Scene.box(ctx, sg[0], sg[1], sg[2], hdg, 0.2, 0.2, 4.2, 0, SIGN.steel, 1, d, false);
+    const ga = P3(sC + 11.6, vr - hw - 6, 2.4), gb = P3(sC + 7.4, vr - hw - 6, 2.4);
+    this.panelFree(ga, gb, 2.0, `tolljn:${site.name}`, () => this.texJunction(site), d);
+  },
+  /** 영업소 지붕 앞면 — 위 띠에 이름, 아래에 차로마다 하이패스 · 일반 표지와 ↓ / ✕ */
+  texTollFace(site, back) {
+    const T = this.TOLL, L = this.tollLanes(), W = 4096, H = 160;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#eef0ec'; g.fillRect(0, 0, W, H);
+    g.fillStyle = SIGN.green; g.fillRect(0, 0, W, H * 0.42);
+    g.fillStyle = SIGN.white;
+    this.text(g, `${site.inf.base} 영업소   ${this.roman(site.inf.base)} Tollgate`, W / 2, H * 0.33, H * 0.3, 800, 'center');
+    // 차로 자리 → 그림 x (보는 사람의 왼쪽이 0)
+    const sL = -L.wOut - 1.2, sR = L.wIn + 1.2, X = (c) => back ? (c - sL) / (sR - sL) * W : (sR - c) / (sR - sL) * W;
+    const mine = back ? L.inn : L.out, theirs = back ? L.out : L.inn, nHp = back ? T.hp[1] : T.hp[0];
+    const pw = T.lane / (sR - sL) * W * 0.9;
+    mine.forEach((c, i) => {
+      const x = X(c), hp = i < nHp;
+      g.fillStyle = hp ? '#1450c8' : SIGN.green; g.fillRect(x - pw / 2, H * 0.5, pw * 0.72, H * 0.44);
+      g.fillStyle = SIGN.white; this.fit(g, hp ? '하이패스' : '일반', x - pw / 2 + pw * 0.36, H * 0.86, H * 0.28, pw * 0.66, 800, 'center');
+      g.fillStyle = '#0c0c0c'; g.fillRect(x + pw * 0.24, H * 0.5, pw * 0.26, H * 0.44);
+      g.save(); g.translate(0, 0); this.arrowCol(g, x + pw * 0.37, H * 0.72, H * 0.3, '#39e36a'); g.restore();
+    });
+    theirs.forEach((c) => {
+      const x = X(c);
+      g.fillStyle = '#0c0c0c'; g.fillRect(x - H * 0.2, H * 0.5, H * 0.4, H * 0.44);
+      g.strokeStyle = '#ff3b30'; g.lineWidth = H * 0.06;
+      g.beginPath(); g.moveTo(x - H * 0.12, H * 0.6); g.lineTo(x + H * 0.12, H * 0.84); g.moveTo(x + H * 0.12, H * 0.6); g.lineTo(x - H * 0.12, H * 0.84); g.stroke();
+    });
+    return cv;
+  },
+  arrowCol(g, x, y, L, col) {
+    g.fillStyle = col; g.fillRect(x - L * 0.08, y - L / 2, L * 0.16, L * 0.6);
+    g.beginPath(); g.moveTo(x, y + L / 2); g.lineTo(x - L * 0.3, y + L * 0.08); g.lineTo(x + L * 0.3, y + L * 0.08); g.closePath(); g.fill();
+  },
+  /** 교차로 앞 일반국도 방향 표지 — 왼쪽 · 오른쪽 갈 곳과 국도 번호 */
+  texJunction(site) {
+    const { cv, g } = this.canvas(512, 256, SIGN.blue), inf = site.inf;
+    this.natShield(g, 256, 70, 46, 34, inf.nat);
+    g.fillStyle = SIGN.white;
+    this.fit(g, '← ' + inf.dest[0], 30, 170, 64, 220, 800);
+    this.fit(g, inf.dest[1] + ' →', 482, 170, 64, 220, 800, 'right');
+    this.fit(g, this.roman(inf.dest[0]), 34, 222, 30, 200, 700);
+    this.fit(g, this.roman(inf.dest[1]), 478, 222, 30, 200, 700, 'right');
+    return cv;
+  },
+
+  /* ----- 분기점 -----
+     램프 가운데(양방향 감속차로가 갈라지는 지점)에서 다른 고속도로가 본선을 직각으로 건너간다(교량).
+     각 방향의 바깥 접속점에서 연결로가 바깥으로 크게 돌아(오른쪽 270°) 그 고속도로의 본선 쪽으로 가는
+     차도에 오른쪽에서 합류한다 — 클로버형 고리와 같은 꼴. 두 방향의 고리는 서로 반대 사분면에 있다. */
+  X: { W: 11.6, med: 1.0, R1: 110, R3: 110, cJ: 15.4 },
+  jctPrep(site) {
+    if (site.jx) return site.jx;
+    const rd = this.road, corr = site.corr, X = this.X;
+    const p = corr.roadS(site.s), g = rd.at(p);
+    const nx = Math.sin(g.hdg), ny = -Math.cos(g.hdg), fx = Math.cos(g.hdg), fy = Math.sin(g.hdg);
+    // 건너는 고속도로 — 횡거 t 마다 높이: 본선 위 8.5 m 교량에서 3.5 % 로 내려 땅(양옆 최고점) 위 0.8 m 까지
+    const zc = g.z + 8.5, n = 241, pts = [], gr = [];
     for (let i = 0; i < n; i++) {
-      const a = pts[i], b = pts[i + 1], w = 5.2;
-      const L = (p, s) => [p.x - p.dy * w * s, p.y + p.dx * w * s, p.z];
-      Scene.quad(L(a, -1), L(b, -1), L(b, 1), L(a, 1), asph);
-      for (const s of [-1, 1]) {
-        const e0 = L(a, s), e1 = L(b, s);
-        Scene.quad(e0, e1, [e1[0], e1[1], e1[2] + 1.0], [e0[0], e0[1], e0[2] + 1.0], bar);
-        Scene.quad([e0[0], e0[1], e0[2] - 1.4], [e1[0], e1[1], e1[2] - 1.4], e1, e0, deck);
-        const m0 = L(a, s * 0.82), m1 = L(b, s * 0.82);
-        Scene.quad([m0[0], m0[1], m0[2] + 0.02], [m1[0], m1[1], m1[2] + 0.02], [m1[0] - a.dy * 0.15 * s, m1[1] + a.dx * 0.15 * s, m1[2] + 0.02], [m0[0] - a.dy * 0.15 * s, m0[1] + a.dx * 0.15 * s, m0[2] + 0.02], wh);
+      const t = -2400 + i * 20, x = g.x + nx * t, y = g.y + ny * t;
+      gr.push(Math.max(this.ground(x, y), this.ground(x + fx * X.W, y + fy * X.W), this.ground(x - fx * X.W, y - fy * X.W)));
+    }
+    for (let i = 0; i < n; i++) {
+      let m = -1e9, k = 0, s = 0;
+      for (let j = -2; j <= 2; j++) m = Math.max(m, gr[clamp(i + j, 0, n - 1)]);
+      for (let j = -3; j <= 3; j++) { s += Math.max(m, gr[clamp(i + j, 0, n - 1)]); k++; }
+      const t = -2400 + i * 20, bridge = zc - Math.max(0, Math.abs(t) - 60) * 0.035;
+      pts.push({ x: g.x + nx * t, y: g.y + ny * t, z: Math.max(bridge, s / k + 0.8), dx: nx, dy: ny, t });
+    }
+    const zAt = (t) => { const f = clamp((t + 2400) / 20, 0, n - 1.001), i = Math.floor(f); return pts[i].z + (pts[i + 1].z - pts[i].z) * (f - i); };
+    const tOf = (x, y) => (x - g.x) * nx + (y - g.y) * ny;
+    /* 연결로 둘 (국소 s, u — 이 방향의 오른쪽 사분면, 모서리는 (S, 0)):
+       고리   진출 램프 초입에서 갈라져 오른쪽으로 270° 돌아 건너는 길의 '본선 쪽으로 오는' 차도에 오른쪽에서 합류 (좌회전 이동)
+       바깥   건너는 길의 같은 차도에서 멀리서 갈라져 큰 반지름으로 오른쪽으로 돌아 바깥 접속점 O 에서 진입 램프로 (우회전 이동)
+       ★ 바깥 연결로는 고리를 둘러 가야 한다 — 고리를 모서리 가까이 작게(R 60), 바깥 연결로를 크게(O 까지) 두면 겹치지 않는다 */
+    const o = this.outer(corr, site.s), S = site.s, RL = 60, sB = S + X.cJ + RL;
+    const zOf = (s, u, dz) => this.P(corr, s, u, dz)[2];
+    const mkRamp = (su, zf) => {
+      const W0 = su.map(([s, u]) => this.P(corr, s, u, 0)), len = []; let acc = 0;
+      for (let i = 0; i < W0.length; i++) { if (i) acc += Math.hypot(W0[i][0] - W0[i - 1][0], W0[i][1] - W0[i - 1][1]); len.push(acc); }
+      return { pts: this.path(corr, su, (i, q) => zf(i, q, len[i] / acc, tOf(q[0], q[1]))), W0 };
+    };
+    // 고리
+    const uB = corr.rampLat(sB - S), su1 = [];
+    for (let k = 0; k <= 36; k++) { const a = Math.PI * 1.5 * k / 36; su1.push([sB + RL * Math.sin(a), uB + RL - RL * Math.cos(a)]); }
+    const nL = su1.length;
+    for (let u = uB + RL - 12; u >= 52; u -= 12) su1.push([S + X.cJ, u]);
+    const zB = zOf(sB, uB, corr.rampDz(sB - S));
+    const loop = mkRamp(su1, (i, q, f, t) => i >= nL - 1 ? zAt(t) + 0.02 : zB + (zAt(tOf(...this.P(corr, S + X.cJ, uB + RL, 0).slice(0, 2))) - zB) * smoothstep(i / (nL - 1)));
+    // 바깥 연결로 — 건너는 길 (S+cJ, uD) 에서 갈라져 반지름 R2 로 O 까지
+    const R2 = o.s - (S + X.cJ), uD = o.u + R2, su2 = [];
+    for (let u = uD + 110; u > uD; u -= 12) su2.push([S + X.cJ, u]);
+    const nD = su2.length;
+    for (let k = 0; k <= 30; k++) { const a = Math.PI / 2 * k / 30; su2.push([S + X.cJ + R2 - R2 * Math.cos(a), uD - R2 * Math.sin(a)]); }
+    const zO = zOf(o.s, o.u, o.dz);
+    const outerR = mkRamp(su2, (i, q, f, t) => {
+      if (i <= nD) return zAt(t) + 0.02;
+      const z = zAt(tOf(...this.P(corr, S + X.cJ, uD, 0).slice(0, 2))) + (zO - zAt(tOf(...this.P(corr, S + X.cJ, uD, 0).slice(0, 2)))) * smoothstep((i - nD) / 30);
+      return i > su2.length - 3 ? z : Math.max(z, this.ground(q[0], q[1]) + 0.5);
+    });
+    const tr = (W0, a, b) => { const t0 = tOf(W0[a][0], W0[a][1]), t1 = tOf(W0[b][0], W0[b][1]); return [Math.min(t0, t1) - 8, Math.max(t0, t1) + 8]; };
+    const mergeSide = (loop.W0[nL][0] - g.x) * fx + (loop.W0[nL][1] - g.y) * fy > 0 ? 1 : 0;
+    const gaps = [tr(loop.W0, nL - 1, loop.W0.length - 1), tr(outerR.W0, 0, nD)];
+    const under = (i, isLoop) => { const q = (isLoop ? loop.pts : outerR.pts)[i]; return Math.abs(tOf(q.x, q.y)) < 70; };
+    site.jx = { pts, loop: loop.pts, nL, outer: outerR.pts, nD, gaps, mergeSide, key: Math.round(p), under };
+    return site.jx;
+  },
+  jct(site) {
+    const d = this.dist(site.corr, site.s + 200, 120, 2800); if (d < 0) return;
+    const J = this.jctPrep(site), X = this.X;
+    // 건너는 고속도로 — 두 방향이 같은 것을 쓰므로 한 번만
+    if (!this._crossDone.has(J.key)) {
+      this._crossDone.add(J.key);
+      const ln = X.med + 0.6, lw = 3.6;
+      // 진행 방향(+n) 오른쪽이 -f — 건너는 길에서 본 오른쪽이 strip 의 + 쪽
+      const skip = (i, k) => { const t = J.pts[i].t; return k === J.mergeSide && J.gaps.some(([a, b]) => t > a && t < b); };
+      this.strip(J.pts, X.W, X.W, {
+        marks: [[-ln, 0.18, '#e2b93b'], [ln, 0.18, '#e2b93b'], [-(ln + lw), 0.16, '#eceee6', 10], [ln + lw, 0.16, '#eceee6', 10],
+          [-(ln + 2 * lw), 0.18, '#eceee6'], [ln + 2 * lw, 0.18, '#eceee6']],
+        par: [1, 1], parSkip: skip, piers: [-6, 6], pierEvery: 2,
+        noPier: (i) => Math.abs(J.pts[i].t) < 34 && Math.abs(J.pts[i].t) > 4,
+        // ★ 본선 구간은 교량 — 땅(자연 지형)은 본선 깎기 비탈보다 높을 수 있어 성토면을 그리면 본선 위에 초록 판이 뜬다
+        bridge: (i) => Math.abs(J.pts[i].t) < 70,
+      }, d);
+      // 가운데 분리대
+      for (let i = 0; i + 1 < J.pts.length; i++) {
+        const a = J.pts[i], b = J.pts[i + 1], dep = Render.depth(a.x, a.y, a.z);
+        if (dep < -60 || dep > Render.drawDist + 300) continue;
+        const c = Scene.haze('#cfcdc4', d);
+        for (const off of [-0.3, 0.3]) Scene.quad(this.side(a, off), this.side(b, off), this.side(b, off, 0.9), this.side(a, off, 0.9), c);
+        Scene.quad(this.side(a, -0.3, 0.9), this.side(b, -0.3, 0.9), this.side(b, 0.3, 0.9), this.side(a, 0.3, 0.9), c);
       }
-      if (i % 4 === 2 && a.z - p0[2] > 3) {
-        const gz = Math.max(rd.terrain(a.x, a.y), rd.waterZ);
-        Scene.box(ctx, a.x, a.y, gz, Math.atan2(a.dy, a.dx), 1.6, 1.6, a.z - 1.4 - gz, 0, '#bdbab2', 1, d, true);
-      }
+      this.crossTraffic(J, d);
+    }
+    // 연결로 — 차로 하나 + 갓길, 건너는 길과 붙는 구간은 그쪽 난간을 비운다
+    const opt = (nJoin, joinAtEnd) => ({
+      marks: [[-1.8, 0.16, '#e2b93b'], [3.6, 0.16, '#eceee6']], par: [1, 1], piers: [1.1], pierEvery: 2,
+      parSkip: (i, k) => k === 0 && (joinAtEnd ? i >= nJoin - 1 : i < nJoin),
+      noFill: (i) => (joinAtEnd ? i >= nJoin - 1 : i < nJoin),          // 건너는 길에 붙은 구간 — 그 길의 비탈이 덮는다
+      bridge: (i) => (joinAtEnd ? i >= nJoin - 1 : i < nJoin) && J.under(i, joinAtEnd),
+    });
+    this.strip(J.loop, 2.4, 4.6, opt(J.nL, true), d);
+    this.strip(J.outer, 2.4, 4.6, opt(J.nD, false), d);
+  },
+  /** 건너는 고속도로의 차 — 시각만으로 정한 자리 (모의와 무관한 배경) */
+  crossTraffic(J, d) {
+    const T = performance.now() / 1000, cols = ['#e6e8ea', '#202226', '#8b9198', '#9c2b2b', '#2a4a86', '#d9d6cf', '#c9a227'];
+    const n = J.pts.length, t0 = J.pts[0].t, span = J.pts[n - 1].t - t0;
+    for (let k = 0; k < 28; k++) {
+      const dir = k % 2 ? 1 : -1, lane = (k >> 1) % 2, v = 27 + (k % 5) * 2.5;
+      let t = ((k * 523.7 + dir * T * v) % span + span) % span + t0;
+      const f = (t - t0) / 20, i = Math.min(n - 2, Math.floor(f)), a = J.pts[i], b = J.pts[i + 1], r = f - i;
+      const p = { x: a.x + (b.x - a.x) * r, y: a.y + (b.y - a.y) * r, z: a.z + (b.z - a.z) * r, dx: a.dx, dy: a.dy };
+      const dep = Render.depth(p.x, p.y, p.z); if (dep < 2 || dep > 1400) continue;
+      const off = -dir * (this.X.med + 0.6 + 1.8 + lane * 3.6);     // +n 으로 가는 차는 그 오른쪽(-f)
+      const q = this.side(p, off), truck = k % 7 === 3;
+      Scene.box(this.ctx, q[0], q[1], q[2], Math.atan2(p.dy, p.dx) + (dir < 0 ? Math.PI : 0), truck ? 10 : 4.5, truck ? 2.4 : 1.8, truck ? 3.2 : 1.45, 0, cols[k % cols.length], 1, dep, false);
     }
   },
   /** 휴게소 — 고리 바깥의 주차장 · 건물 · 주유소 · 기둥 간판 */
@@ -534,12 +826,6 @@ const HwyFx = {
     this.text(g, '휴게소', 256, 260, 96, 900, 'center');
     const k = 0.62, wP = (3 * 1.18 + 1) * 150 * k;
     g.save(); g.translate((512 - wP) / 2, 318); g.scale(k, k); this.pictos(g, 0, 0, 150); g.restore();
-    return cv;
-  },
-  texToll(site) {
-    const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 64;
-    const g = cv.getContext('2d'); g.fillStyle = SIGN.green; g.fillRect(0, 0, 1024, 64);
-    g.fillStyle = SIGN.white; this.text(g, site.inf.base + ' 영업소   ' + this.roman(site.inf.base) + ' Tollgate', 512, 46, 40, 800, 'center');
     return cv;
   },
 };
