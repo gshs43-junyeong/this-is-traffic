@@ -238,6 +238,92 @@ function tplHighway(o) {
   return map;
 }
 
+/** 대도시 — 4.8 km 네모: 간선(800 m) · 일반도로(400 m) · 이면도로(200 m) 격자, 도심을 가로지르는 고가 고속도로(동서)와
+    지하 고속도로(남북) · 다이아몬드 나들목 여섯.
+    ★ 고속도로 밑 한 줄(동서 y = 400 · 남북 x = 400)은 길을 내지 않는다 — 나들목 연결로가 그 사이 빈 땅을 쓴다.
+    ★ 고속도로가 땅으로 내려오는 곳(올라가는 곳)은 도시 밖(경계 ± 200 m 넘어)에 둔다 — 안에서 내려오면 길과 같은 높이로 엇갈린다. */
+function tplMetro(o) {
+  const map = newMap(), H = 2400, S = 200, yH = 400, xV = 400, X0 = 2650, XG = 4200;
+  const cs = []; for (let v = -H; v <= H; v += S) cs.push(v);
+  const clsOf = (v) => (v % 800 === 0 ? 'arterial' : v % 400 === 0 ? 'street' : 'local');
+  const lnOf = (c) => (c === 'arterial' ? [3, 3] : c === 'street' ? [2, 2] : [1, 1]);
+  const id = new Map(), at = (x, y) => id.get(x + ',' + y);
+  const ensure = (x, y, lv) => { const k = x + ',' + y; if (!id.has(k)) id.set(k, addNode(map, x, y, lv).id); return id.get(k); };
+  // 나들목 연결로 끝 — 간선 위에 미리 박아 둔다
+  const icX = [-1600, 0, 1600], icY = [-1600, 0, 1600];
+  const extraV = new Map(), extraH = new Map();         // 남북 길(x) 위 · 동서 길(y) 위의 덧 노드
+  for (const X of icX) extraV.set(X, [yH - 100, yH + 100]);
+  for (const Y of icY) extraH.set(Y, [xV - 100, xV + 100]);
+  // 동서 길 — y 마다 (고속도로 줄은 뺀다)
+  for (const y of cs) {
+    if (y === yH) continue;
+    const c = clsOf(y), xsRow = cs.filter((x) => x !== xV || c === 'arterial' || true).concat(extraH.get(y) || []).sort((a, b) => a - b);
+    for (let i = 0; i + 1 < xsRow.length; i++) {
+      const a = xsRow[i], b = xsRow[i + 1];
+      addRoadRaw(map, ensure(a, y), ensure(b, y), { cls: c, lanes: lnOf(c) });
+    }
+  }
+  // 남북 길 — x 마다 (지하 고속도로 줄은 뺀다)
+  for (const x of cs) {
+    if (x === xV) continue;
+    const c = clsOf(x), ysCol = cs.filter((y) => y !== yH).concat(extraV.get(x) || []).sort((a, b) => a - b);
+    for (let i = 0; i + 1 < ysCol.length; i++) addRoadRaw(map, ensure(x, ysCol[i]), ensure(x, ysCol[i + 1]), { cls: c, lanes: lnOf(c) });
+  }
+  // x = 400 줄의 동서 길 노드는 남북 길이 없어 두 갈래 — 그냥 지나가는 점이므로 지운다 (도로를 합친다)
+  const merge = (nid) => {
+    const rs = map.roads.filter((r) => r.a === nid || r.b === nid);
+    if (rs.length !== 2) return;
+    const [r1, r2] = rs, a = r1.a === nid ? r1.b : r1.a, b = r2.a === nid ? r2.b : r2.a;
+    map.roads.splice(map.roads.indexOf(r1), 1); map.roads.splice(map.roads.indexOf(r2), 1);
+    addRoadRaw(map, a, b, { cls: r1.cls, lanes: r1.lanes });
+  };
+  for (const y of cs) if (y !== yH && !(extraH.get(y))) { const n = at(xV, y); if (n) merge(n); }
+  // 도시 밖 출입로 — 간선 끝마다
+  const st = 250;
+  for (const v of cs) {
+    if (clsOf(v) !== 'arterial') continue;
+    const ln = lnOf('arterial');
+    addRoadRaw(map, addNode(map, v, -H - st).id, at(v, -H), { cls: 'arterial', lanes: ln });
+    addRoadRaw(map, at(v, H), addNode(map, v, H + st).id, { cls: 'arterial', lanes: ln });
+    addRoadRaw(map, addNode(map, -H - st, v).id, at(-H, v), { cls: 'arterial', lanes: ln });
+    addRoadRaw(map, at(H, v), addNode(map, H + st, v).id, { cls: 'arterial', lanes: ln });
+  }
+  const hw = { cls: 'highway', lanes: [3, 3] };
+  // 동서 고가 고속도로 — 서 → 동이 A → B (동쪽으로 가는 차는 남쪽 차도)
+  const ew = [addNode(map, -XG, yH).id, addNode(map, -X0, yH, 'bridge').id];
+  const rpB = { cls: 'ramp', lanes: [1, 0], level: 'bridge' };
+  for (const X of icX) {
+    const n1 = addNode(map, X - 180, yH, 'bridge'), n2 = addNode(map, X + 180, yH, 'bridge');
+    const tS = mapNode(map, at(X, yH - 100)), tN = mapNode(map, at(X, yH + 100));
+    addRoadRaw(map, n1.id, tS.id, Object.assign({ c1: [n1.x + 90, yH - 8], c2: [X - 40, tS.y + 6] }, rpB));
+    addRoadRaw(map, tS.id, n2.id, Object.assign({ c1: [X + 40, tS.y + 6], c2: [n2.x - 90, yH - 8] }, rpB));
+    addRoadRaw(map, n2.id, tN.id, Object.assign({ c1: [n2.x - 90, yH + 8], c2: [X + 40, tN.y - 6] }, rpB));
+    addRoadRaw(map, tN.id, n1.id, Object.assign({ c1: [X - 40, tN.y - 6], c2: [n1.x + 90, yH + 8] }, rpB));
+    ew.push(n1.id, n2.id);
+  }
+  ew.push(addNode(map, X0, yH, 'bridge').id, addNode(map, XG, yH).id);
+  for (let i = 0; i + 1 < ew.length; i++) addRoadRaw(map, ew[i], ew[i + 1], Object.assign({ level: i === 0 || i === ew.length - 2 ? 'ground' : 'bridge' }, hw));
+  // 남북 지하 고속도로 — 남 → 북이 A → B (북쪽으로 가는 차는 동쪽 차도)
+  const ns = [addNode(map, xV, -XG).id, addNode(map, xV, -X0, 'tunnel').id];
+  const rpT = { cls: 'ramp', lanes: [1, 0], level: 'tunnel' };
+  for (const Y of icY) {
+    const n1 = addNode(map, xV, Y - 180, 'tunnel'), n2 = addNode(map, xV, Y + 180, 'tunnel');
+    const tE = mapNode(map, at(xV + 100, Y)), tW = mapNode(map, at(xV - 100, Y));
+    addRoadRaw(map, n1.id, tE.id, Object.assign({ c1: [xV + 8, n1.y + 90], c2: [tE.x + 6, Y - 40] }, rpT));
+    addRoadRaw(map, tE.id, n2.id, Object.assign({ c1: [tE.x + 6, Y + 40], c2: [xV + 8, n2.y - 90] }, rpT));
+    addRoadRaw(map, n2.id, tW.id, Object.assign({ c1: [xV - 8, n2.y - 90], c2: [tW.x - 6, Y + 40] }, rpT));
+    addRoadRaw(map, tW.id, n1.id, Object.assign({ c1: [tW.x - 6, Y - 40], c2: [xV - 8, n1.y + 90] }, rpT));
+    ns.push(n1.id, n2.id);
+  }
+  ns.push(addNode(map, xV, X0, 'tunnel').id, addNode(map, xV, XG).id);
+  for (let i = 0; i + 1 < ns.length; i++) addRoadRaw(map, ns[i], ns[i + 1], Object.assign({ level: i === 0 || i === ns.length - 2 ? 'ground' : 'tunnel' }, hw));
+  // 간선끼리 만나는 곳 · 나들목 끝 교차로는 좌회전 전용 차로
+  for (const r of map.roads) if (r.cls === 'arterial') { r.ends.a = { bl: 1 }; r.ends.b = { bl: 1 }; }
+  map.nodes = map.nodes.filter((n) => map.roads.some((r) => r.a === n.id || r.b === n.id));
+  map.name = '대도시';
+  return map;
+}
+
 /* ---------- 건물 채우기 ---------- */
 /** 길가를 따라 빈 땅에 건물을 놓는다 (도로 · 다른 건물과 겹치지 않게) — 놓은 수 */
 function autofill(map, seed, density) {
@@ -251,7 +337,10 @@ function autofill(map, seed, density) {
     for (let i = 0; i < R.g.n; i += 3) if (R.g.z[i] > -5 || i % 9 === 0) add({ x: R.g.x[i], y: R.g.y[i], r: R.g.z[i] < -5 ? 4 : hw }, R.g.x[i], R.g.y[i]);
   }
   for (const N of net.nodes) add({ x: N.x, y: N.y, r: Math.max(0, ...N.legs.map((l) => l.sb)) + 4 }, N.x, N.y);
+  // 건물도 칸으로 — 하나씩 견주면 대도시(건물 8 천)에서 n² 였다
+  const bgrid = new Map(), bput = (q) => { const k = key(q.b.x, q.b.y); if (!bgrid.has(k)) bgrid.set(k, []); bgrid.get(k).push(q); };
   const blds = map.blds.map((b) => ({ b, P: bldCorners(b) }));
+  for (const q of blds) bput(q);
   const near = (x, y, rad) => {
     const out = [];
     for (let i = Math.floor((x - rad) / cell); i <= Math.floor((x + rad) / cell); i++) for (let j = Math.floor((y - rad) / cell); j <= Math.floor((y + rad) / cell); j++) { const a = grid.get(i + ',' + j); if (a) out.push(...a); }
@@ -260,7 +349,10 @@ function autofill(map, seed, density) {
   const fits = (b) => {
     const P = bldCorners(b), rad = Math.hypot(b.w, b.d) / 2;
     for (const o of near(b.x, b.y, rad + 40)) if (distRect(o.x, o.y, b) < o.r) return false;
-    for (const q of blds) if (Math.hypot(q.b.x - b.x, q.b.y - b.y) < rad + Math.hypot(q.b.w, q.b.d) / 2 + 2 && rectsHit(P, q.P, 2)) return false;
+    for (let i = Math.floor((b.x - 80) / cell); i <= Math.floor((b.x + 80) / cell); i++) for (let j = Math.floor((b.y - 80) / cell); j <= Math.floor((b.y + 80) / cell); j++) {
+      const a = bgrid.get(i + ',' + j); if (!a) continue;
+      for (const q of a) if (Math.hypot(q.b.x - b.x, q.b.y - b.y) < rad + Math.hypot(q.b.w, q.b.d) / 2 + 2 && rectsHit(P, q.P, 2)) return false;
+    }
     return true;
   };
   // 도시 가운데 · 크기 (건물 높이)
@@ -291,7 +383,7 @@ function autofill(map, seed, density) {
           b.id = map.nid++;
           b.acc = { road: R.id, sc: Math.round((sc + front / 2) * 10) / 10, side };
           b.x = Math.round(b.x * 10) / 10; b.y = Math.round(b.y * 10) / 10; b.w = Math.round(b.w * 10) / 10; b.d = Math.round(b.d * 10) / 10; b.h = Math.round(b.h);
-          map.blds.push(b); blds.push({ b, P: bldCorners(b) }); placed++;
+          map.blds.push(b); { const q = { b, P: bldCorners(b) }; blds.push(q); bput(q); } placed++;
           sc += front + rng.range(1, 6);
         } else sc += 6;
       }
@@ -321,7 +413,7 @@ function rectsHit(P, Q, m) {
 /** 견본 이름 → 지도 (건물까지) */
 function makeTemplate(kind, o) {
   o = o || {};
-  const map = kind === 'organic' ? tplOrganic(o) : kind === 'highway' ? tplHighway(o) : tplGrid(o);
-  autofill(map, o.seed | 0, 1);
+  const map = kind === 'organic' ? tplOrganic(o) : kind === 'highway' ? tplHighway(o) : kind === 'metro' ? tplMetro(o) : tplGrid(o);
+  autofill(map, o.seed | 0, kind === 'metro' ? 0.55 : 1);
   return map;
 }

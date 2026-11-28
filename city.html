@@ -184,7 +184,7 @@ body.editing #toast{top:150px}
         <button id="eUndo" title="Ctrl+Z">↶</button><button id="eRedo" title="Ctrl+Shift+Z">↷</button>
         <button id="eFill" title="길가 빈 땅에 건물을 놓는다">건물 채우기</button><button id="eClearB">건물 비우기</button><button id="eClearAll" class="bad">모두 지우기</button>
         <span class="sep"></span>
-        <button data-tpl="grid">격자</button><button data-tpl="organic">유기형</button><button data-tpl="highway">고속도로 도시</button>
+        <button data-tpl="grid">격자</button><button data-tpl="organic">유기형</button><button data-tpl="highway">고속도로 도시</button><button data-tpl="metro">대도시</button>
         <span class="sep"></span>
         <button id="eExport" title="지도를 파일로 내려받기">내보내기</button><button id="eImport">불러오기</button><input type="file" id="eFile" accept=".json,application/json" style="display:none">
         <button id="eDone" class="primary">편집 끝 (E)</button>
@@ -221,6 +221,7 @@ body.editing #toast{top:150px}
       </div>
       <div class="sect">견본 도시 (지금 지도를 바꾼다 — 편집의 되돌리기로 살릴 수 있다)</div>
       <div class="presets">
+        <button data-ptpl="metro">대도시 — 4.8 km 네모 · 간선 · 일반 · 이면도로 600 여 교차로 · 고가 고속도로와 지하 고속도로 · 나들목 여섯 (수요 2~6 만 대/시 권장)</button>
         <button data-ptpl="highway">고속도로가 지나는 도시 — 고가 고속도로 · 다이아몬드 나들목 · 지하차도 · 고가차도</button>
         <button data-ptpl="organic">유기형 도시 — 고리 두 겹 · 휘어진 방사로 · 갈래 셋 · 다섯</button>
         <button data-ptpl="grid">격자 도시 (아래 값)</button>
@@ -233,8 +234,9 @@ body.editing #toast{top:150px}
       </div>
       <div class="sect">수요</div>
       <div class="grid">
-        <div class="fld"><label>통행 수요 <span class="val" id="v_demand"></span></label><input type="range" id="c_demand" min="200" max="6000" step="100"><div class="hint">도시 전체에서 한 시간에 출발하는 차 (포아송 도착).</div></div>
+        <div class="fld"><label>통행 수요 <span class="val" id="v_demand"></span></label><input type="range" id="c_demand" min="200" max="60000" step="200"><div class="hint">도시 전체에서 한 시간에 출발하는 차 (포아송 도착).</div></div>
         <div class="fld"><label>건물 출발 · 도착 비율 <span class="val" id="v_inner"></span></label><input type="range" id="c_inner" min="0" max="1" step="0.05"><div class="hint">나머지는 도시 밖 출입구(끝이 열린 도로)에서 오고 간다. 건물은 세워 둔 차가 있어야 출발하고, 빈 자리가 있어야 도착한다.</div></div>
+        <div class="fld"><label>고속도로 통과 교통 <span class="val" id="v_through"></span></label><input type="range" id="c_through" min="0" max="1" step="0.05"><div class="hint">고속도로 끝에서 들어온 차 가운데 나들목으로 빠지지 않고 도시를 가로질러 반대쪽 끝으로 가는 몫.</div></div>
         <div class="fld"><label>시드 <span class="val" id="v_seed"></span></label><input type="range" id="c_seed" min="1" max="99" step="1"><div class="hint">차 · 출발지 · 견본 도시의 건물 배치가 바뀐다.</div></div>
       </div>
       <div class="sect">신호 기본값 (교차로마다 편집에서 따로 정할 수 있다)</div>

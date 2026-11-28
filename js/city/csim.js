@@ -13,7 +13,9 @@
    ========================================================================== */
 'use strict';
 
-const CSIM = { dt: 0.1, turnPen: { L: 14, S: 0, R: 5, U: 30 }, reroute: 0.35, unjamT: 240 };
+/* dt 는 차가 많으면(bigN 대 넘게) dtBig 으로 — 대도시 1 만 대에서 0.1 s 로는 실시간을 못 따라갔다.
+   0.2 s 로 바꿔도 30000 대/시 대도시 20 분의 도착 · 교착 해소 수가 0.1 s 와 같은 수준이었다 (1970 · 15 대 대 1940 · 15 대) */
+const CSIM = { dt: 0.1, dtBig: 0.2, bigN: 2500, turnPen: { L: 14, S: 0, R: 5, U: 30 }, reroute: 0.35, unjamT: 240 };
 const CCLASS = [
   { key: 'mini', name: '경차', share: 0.10, len: 3.60, wid: 1.60, hei: 1.52 },
   { key: 'sedan', name: '승용', share: 0.48, len: 4.75, wid: 1.84, hei: 1.45 },
@@ -96,14 +98,19 @@ class CitySim {
     if (L === goal) return [L];
     const dist = this._rd && this._rd.length === N ? this._rd : (this._rd = new Float64Array(N)), prev = this._rp && this._rp.length === N ? this._rp : (this._rp = new Int32Array(N));
     dist.fill(Infinity); prev.fill(-1); dist[L.id] = 0;
-    const heap = [[0, L.id]];
+    /* A* — 남은 곧은 거리를 가장 빠른 길(고속도로 100 km/h)로 간다고 본 시간을 더한다 (넘쳐 재지 않으므로 답은 같다).
+       대도시(구간 2 천여 개)에서 다익스트라는 통행마다 거의 온 도시를 뒤졌다 */
+    const gx = goal.to.x, gy = goal.to.y, iv = 1 / (100 * KMH);
+    const hOf = (u) => Math.hypot(links[u].to.x - gx, links[u].to.y - gy) * iv;
+    const heap = [[hOf(L.id), L.id]];
     while (heap.length) {
-      const [d, u] = heapPop(heap);
-      if (d > dist[u]) continue;
+      const [f, u] = heapPop(heap);
+      const d = dist[u];
+      if (f - hOf(u) > d + 1e-9) continue;
       if (u === goal.id) break;
       for (const e of links[u].next) {
         const nd = d + e.L.tt + CSIM.turnPen[e.mv];
-        if (nd < dist[e.L.id]) { dist[e.L.id] = nd; prev[e.L.id] = u; heapPush(heap, [nd, e.L.id]); }
+        if (nd < dist[e.L.id]) { dist[e.L.id] = nd; prev[e.L.id] = u; heapPush(heap, [nd + hOf(e.L.id), e.L.id]); }
       }
     }
     if (dist[goal.id] === Infinity) return null;
@@ -128,6 +135,13 @@ class CitySim {
     }
     if (!o && this.gates.length) o = { gate: pickW(rng, this.gates, (g) => g.w) };
     if (!o) return;
+    /* 고속도로 통과 교통 — 고속도로 끝에서 들어온 차의 through 몫은 나들목으로 빠지지 않고 반대쪽 끝(가장 먼 고속도로
+       출입구)까지 간다. ★ 출입구를 무게만으로 고르면 고속도로를 가로지르는 차가 몇 % 에 그쳤다 */
+    if (o.gate && o.gate.road.cl.fast && rng.chance(this.cfg.through == null ? 0.7 : +this.cfg.through)) {
+      let far = null, fd = -1;
+      for (const g of this.gates) if (g !== o.gate && g.road.cl.fast) { const dd = Math.hypot(g.N.x - o.gate.N.x, g.N.y - o.gate.N.y); if (dd > fd) { fd = dd; far = g; } }
+      if (far) d = { gate: far };
+    }
     for (let k = 0; k < 8 && !d; k++) {
       if (this.bldOK.length && rng.chance(pIn)) { const B = pickW(rng, this.bldOK, (b) => Math.max(0, b.cap - b.occ - b.inbound)); if (B) d = { bld: B }; }
       if (!d && this.gates.length) d = { gate: pickW(rng, this.gates, (g) => g.w) };
@@ -202,7 +216,11 @@ class CitySim {
   }
 
   /* ----- 한 걸음 ----- */
-  step(dt) { let t = dt; while (t > 1e-9) { const h = Math.min(CSIM.dt, t); this.sub(h); t -= h; } }
+  step(dt) {
+    const hMax = this.cars.length > CSIM.bigN ? CSIM.dtBig : CSIM.dt;
+    let t = dt; while (t > 1e-9) { const h = Math.min(hMax, t); this.sub(h); t -= h; }
+    for (const v of this.cars) this.pose(v);         // 자리 · 방향은 그림에만 쓴다 — 걸음마다가 아니라 한 번
+  }
   sub(dt) {
     this.time += dt;
     while (this.time >= this.tTrip) { this.newTrip(); this.tTrip += this.nextExp(this.cfg.demand); }
@@ -210,6 +228,9 @@ class CitySim {
     for (const ln of this.net.lanes) if (ln.req.length) ln.req.length = 0;
     for (const v of this.cars) this.decide(v);
     this.unjam();
+    // 간선마다 차의 순번 — accel 이 indexOf 로 찾으면 차가 많은 대도시에서 차로마다 n² 이었다
+    const stamp = (this._stamp = (this._stamp || 0) + 1);
+    for (const v of this.cars) { const e = v.edge; if (e._st !== stamp) { e._st = stamp; const a = e.cars; for (let i = 0; i < a.length; i++) a[i]._i = i; } }
     for (const v of this.cars) v.acc = this.accel(v);
     const fin = [];
     for (const v of this.cars) {
@@ -224,7 +245,6 @@ class CitySim {
       if (v.teleport || this.advance(v)) fin.push(v);
     }
     for (const v of fin) this.finish(v);
-    for (const v of this.cars) this.pose(v);
     this.histT += dt;
     if (this.histT >= 10) { this.histT = 0; this.record(); }
   }
@@ -328,7 +348,7 @@ class CitySim {
     let acc = Infinity;
     const lim = (gap, dv) => { const a = idmAccel(v.v, vDes, gap, dv, v.a, v.T, v.s0, v.sqrtAB); if (a < acc) acc = a; };
     // 앞차 — 이 간선, 없으면 갈 연결로 · 그 다음 차로
-    const i = e.cars.indexOf(v);
+    const i = e.cars[v._i] === v ? v._i : e.cars.indexOf(v);
     let lead = e.cars[i + 1], gap = lead ? lead.s - lead.len - v.s : 0;
     const dist = e.len - v.s;
     if (!lead && (e.kind === 'lane' || e.kind === 'conn')) {

@@ -39,6 +39,11 @@ const CScene = {
   /* ---------- 고정 메쉬 ---------- */
   buildStatic() {
     const net = this.net, M = new MeshB(), rng = new RNG('cityart:' + this.seed);
+    /* ★ 큰 도시(구간 1500 넘게)는 거칠게 — 노면 · 노면표시를 6 m 마다, 가로수를 두 배 간격으로, 주차빌딩 안 차는 뺀다.
+       대도시를 그대로 빚으면 정점이 1400 만 개(1 fps)였다 */
+    this.coarse = net.links.length > 1500;
+    this.bldByLink = new Map();
+    for (const Bd of net.blds) { if (!this.bldByLink.has(Bd.link)) this.bldByLink.set(Bd.link, []); this.bldByLink.get(Bd.link).push(Bd); }
     this.lamps = []; this.heads = []; this.lids = []; this.signs = [];
     this.ground(M);
     for (const L of net.links) this.linkSurface(M, L, rng);
@@ -103,7 +108,7 @@ const CScene = {
     const inner = R.twoWay ? () => 0 : () => L.base - sh;
     const outer = (t) => L.outer(clamp(t, 0, L.len)) + sh;
     const asph = NX(cl.fast ? CCOL.asphaltH : CCOL.asphalt);
-    const ts = tRange(ext0, ext1, 2), A = {}, B = {};
+    const ts = this.coarse ? this.simplifyTs(L, tRange(ext0, ext1, 2), outer) : tRange(ext0, ext1, 2), A = {}, B = {};
     for (let i = 0; i + 1 < ts.length; i++) {
       L.center(ts[i], A); L.center(ts[i + 1], B);
       M.quad(offPt(A, inner(ts[i])), offPt(B, inner(ts[i + 1])), offPt(B, outer(ts[i + 1])), offPt(A, outer(ts[i])), asph);
@@ -125,10 +130,11 @@ const CScene = {
       // 가로수 · 가로등 — 지상 길가 보도에 (건물 진입로 · 교차로 앞은 피한다)
       if (R.cls === 'local' && L.len < 60) continue;
       let k = rng.int(0, 1);
-      for (let t = 12; t < L.len - 12; t += 17) {
+      const bl = this.bldByLink.get(L) || [];
+      for (let t = 12; t < L.len - 12; t += this.coarse ? 34 : 17) {
         L.center(t, A);
         if (Math.abs(A.z) > 0.2) continue;
-        if (this.net.blds.some((Bd) => Bd.link === L && Math.abs(Bd.lane.cAt(Bd.sIn) + 5 - t) < 9)) continue;
+        if (bl.some((Bd) => Math.abs(Bd.lane.cAt(Bd.sIn) + 5 - t) < 9)) continue;
         const off = (sd > 0 ? outer(t) : inner(t)) + sd * cl.sw * 0.42, p = offPt(A, off, 0.15);
         if ((k++ & 1) === 0) this.tree(M, rng, p[0], p[1], 0.15, 0.85);
         else {
@@ -139,6 +145,22 @@ const CScene = {
         }
       }
     }
+  },
+  /** 곧은 데는 건너뛴 표본 — 사이 점이 곧게 이은 선에서 (자리 · 높이 · 폭) 8 cm 안이면 뺀다 */
+  simplifyTs(L, ts, outer) {
+    const o = {}, S = ts.map((t) => { L.center(t, o); return [o.x, o.y, o.z, outer(t)]; });
+    const keep = [0];
+    let a = 0;
+    for (let j = 2; j < ts.length; j++) {
+      let ok = true;
+      for (let k = a + 1; k < j && ok; k++) {
+        const f = (ts[k] - ts[a]) / (ts[j] - ts[a]);
+        for (let q = 0; q < 4; q++) if (Math.abs(S[a][q] + (S[j][q] - S[a][q]) * f - S[k][q]) > 0.08) { ok = false; break; }
+      }
+      if (!ok) { keep.push(j - 1); a = j - 1; }
+    }
+    keep.push(ts.length - 1);
+    return keep.map((i) => ts[i]);
   },
   /** 고가 상판 · 교각 · 난간 / 진입 둑 옹벽 / 지하 옹벽 · 덮개 · 고속도로 중앙 분리대 */
   roadStructure(M, R) {
@@ -339,7 +361,7 @@ const CScene = {
     const ext0 = L.from.gate ? -70 : 0, ext1 = L.to.gate ? L.len + 70 : L.len;
     const A = {}, B = {};
     const strip = (t0, t1, fa, fb, col, step) => {
-      const ts = tRange(t0, t1, step || 2);
+      const ts = tRange(t0, t1, step || (this.coarse ? 6 : 2));
       for (let i = 0; i + 1 < ts.length; i++) {
         L.center(ts[i], A); L.center(ts[i + 1], B);
         M.quad(offPt(A, fa(ts[i]), z), offPt(B, fa(ts[i + 1]), z), offPt(B, fb(ts[i + 1]), z), offPt(A, fb(ts[i]), z), col);
@@ -459,7 +481,7 @@ const CScene = {
   building(M, rng, B) {
     const b = B.m, P = bldCorners(b), H0 = Math.max(4, b.h || 12);
     const ins = (k) => { const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0), hw = b.w / 2 + k, hd = b.d / 2 + k; return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([u, v]) => [b.x + c * u - s * v, b.y + s * u + c * v]); };
-    this.prism(M, ins(1.2), -0.05, 0.12, CCOL.pad);
+    if (!this.coarse) this.prism(M, ins(1.2), -0.05, 0.12, CCOL.pad);
     if (b.kind === 'parking') return this.parkingBld(M, rng, B, P, H0);
     const tall = H0 > 34, col = tall && rng.chance(0.6) ? rng.pick(CGLASS) : rng.pick(CBLD);
     const fl = 3.4, n = Math.max(1, Math.floor((H0 - 1) / fl)), H = n * fl + 0.8;
@@ -470,8 +492,9 @@ const CScene = {
       const ux = (c[0] - a[0]) / len, uy = (c[1] - a[1]) / len, nx = uy, ny = -ux, o = 0.03;
       const lit = faceLit(nx, ny, 0, 0);
       const Q = (s, z) => [a[0] + ux * s + nx * o, a[1] + uy * s + ny * o, z];
-      for (let f = 0; f < n; f++) {
-        const zA = f * fl + 1.0, zB = zA + (tall ? 2.1 : 1.4);
+      const fs = this.coarse ? 3 : 1;          // 큰 도시는 창 띠 하나가 세 층
+      for (let f = 0; f < n; f += f > 0 ? fs : 1) {
+        const zA = f * fl + 1.0, zB = zA + (tall ? 2.1 : 1.4) + (f > 0 ? (Math.min(fs, n - f) - 1) * fl : 0);
         if (f === 0 && !tall && b.kind !== 'apart') { M.quad(Q(0.6, zA - 0.6), Q(len - 0.6, zA - 0.6), Q(len - 0.6, zB + 0.3), Q(0.6, zB + 0.3), PNIGHT ? '#f2dfa8' : shade('#5b6670', lit)); continue; }
         if (!PNIGHT) { M.quad(Q(0.7, zA), Q(len - 0.7, zA), Q(len - 0.7, zB), Q(0.7, zB), shade(win, lit * rng.range(0.92, 1.08))); continue; }
         const k = Math.max(1, Math.round((len - 1.4) / 3.6)), wq = (len - 1.4) / k;
@@ -482,7 +505,7 @@ const CScene = {
       }
     }
     this.prism(M, ins(-0.3), H, H + 0.5, shade(col, 0.9));
-    if (b.w > 10 && b.d > 10) { const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0), u = rng.range(-b.w / 4, b.w / 4), v = rng.range(-b.d / 4, b.d / 4); const cx = b.x + c * u - s * v, cy = b.y + s * u + c * v; M.box(cx - 2, cy - 1.8, H, cx + 2, cy + 1.8, H + 2.6, CCOL.roof, 0, true); }
+    if (b.w > 10 && b.d > 10 && (!this.coarse || tall)) { const c = Math.cos(b.rot || 0), s = Math.sin(b.rot || 0), u = rng.range(-b.w / 4, b.w / 4), v = rng.range(-b.d / 4, b.d / 4); const cx = b.x + c * u - s * v, cy = b.y + s * u + c * v; M.box(cx - 2, cy - 1.8, H, cx + 2, cy + 1.8, H + 2.6, CCOL.roof, 0, true); }
     this.garage(M, B);
   },
   /** 주차빌딩 — 층마다 슬래브 · 난간 · 기둥, 안에 세운 차 몇 대 */
@@ -496,7 +519,7 @@ const CScene = {
       if (f > 0) this.prism(M, P.map((p, i) => p), z + 0.3, z + 1.1, shade(CCOL.wall, 1.05), false);
       if (f < n) {
         for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1]]) { const q = W(u * (b.w / 2 - 0.4), v * (b.d / 2 - 0.4)); M.box(q[0] - 0.3, q[1] - 0.3, z + 0.3, q[0] + 0.3, q[1] + 0.3, z + fl, CCOL.pier, 1, true); }
-        for (let u = -b.w / 2 + 2.5; u < b.w / 2 - 2.5; u += 2.6) for (const v of [-b.d / 2 + 3, b.d / 2 - 3]) {
+        if (!this.coarse) for (let u = -b.w / 2 + 2.5; u < b.w / 2 - 2.5; u += 2.6) for (const v of [-b.d / 2 + 3, b.d / 2 - 3]) {
           if (!rng.chance(0.55)) continue;
           const cls = rng.weighted(CCLASS.map((k) => [k, k.share])), q = W(u, v);
           carMesh(M, { cls, len: cls.len, wid: cls.wid, hei: cls.hei, color: rng.weighted(CAR_COLORS) }, q[0], q[1], z + 0.31, (b.rot || 0) + Math.PI / 2 * (v > 0 ? 1 : -1), 0, 1, false);
@@ -516,8 +539,9 @@ const CScene = {
     const drv = NX(CCOL.drive);
     for (const p of [B.din, B.dout]) {
       const A = {}, Bq = {};
-      for (let s = 0; s < p.len - 0.5; s += 1.5) {
-        p.at(s, A); p.at(Math.min(p.len, s + 1.5), Bq);
+      const st = this.coarse ? 5 : 1.5;
+      for (let s = 0; s < p.len - 0.5; s += st) {
+        p.at(s, A); p.at(Math.min(p.len, s + st), Bq);
         M.quad(offPt(A, -1.7, 0.165), offPt(Bq, -1.7, 0.165), offPt(Bq, 1.7, 0.165), offPt(A, 1.7, 0.165), drv);
       }
     }
@@ -596,7 +620,8 @@ const CScene = {
         Render.fill('#000000');
         ctx.globalAlpha = 1; Render.layer = 0;
       }
-      carMesh(em, v, v.x, v.y, v.z, v.h, v.p, v.z < -4 ? 2 : 0, dist < 240);
+      if (dist < 420 || v === opt.sel) carMesh(em, v, v.x, v.y, v.z, v.h, v.p, v.z < -4 ? 2 : 0, dist < 240);
+      else this.carBox(v);           // 먼 차는 상자 하나 — 대도시 1 만 대를 다 빚으면 프레임마다 정점 수백만 개였다
       if (dist < 420) this.lights(v, t, dist);
     }
     if (sim) for (const hd of this.heads) this.headLamps(em, hd);
@@ -617,6 +642,16 @@ const CScene = {
       Render.glow(x, y, z - 0.2, clamp(2600 / d, 6, 60) * k, '#ffe9b0', '#ffe9b044', 0.45);
     }
     if (Render.gl) { Render.preFlush = (gl, n, F) => this.drawStatic(gl, n, F); Render.glFlush(); }
+  },
+  /** 먼 차 — 윗면과 카메라 쪽 옆면 둘 */
+  carBox(v) {
+    const ch = Math.cos(v.h), sh = Math.sin(v.h), hl = v.len * 0.5, hw = v.wid * 0.5, z0 = v.z + 0.25, z1 = v.z + v.hei;
+    const P = (a, b, z) => [v.x + ch * hl * a - sh * hw * b, v.y + sh * hl * a + ch * hw * b, z];
+    const c = v._boxC || (v._boxC = [v.color, shade(v.color, 0.78), shade(v.color, 0.62)]);
+    this.dquad(P(-1, -1, z1), P(1, -1, z1), P(1, 1, z1), P(-1, 1, z1), c[0]);
+    const fx = Render.cx - v.x, fy = Render.cy - v.y, sa = fx * ch + fy * sh > 0 ? 1 : -1, sb = -fx * sh + fy * ch > 0 ? 1 : -1;
+    this.dquad(P(sa, -1, z0), P(sa, 1, z0), P(sa, 1, z1), P(sa, -1, z1), c[1]);
+    this.dquad(P(-1, sb, z0), P(1, sb, z0), P(1, sb, z1), P(-1, sb, z1), c[2]);
   },
   headLamps(em, hd) {
     const [lx, ly, lz] = hd.lamps[1], dist = Render.depth(lx, ly, lz);

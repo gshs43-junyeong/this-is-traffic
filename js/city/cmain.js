@@ -7,7 +7,7 @@
    ========================================================================== */
 'use strict';
 
-const CCFG_DEFAULT = { demand: 2000, inner: 0.5, seed: 1, coord: false };
+const CCFG_DEFAULT = { demand: 2000, inner: 0.5, seed: 1, coord: false, through: 0.7 };
 const SIDE_KO = { N: '북', E: '동', S: '남', W: '서' };
 const MV_KO = { L: '좌회전', S: '직진', R: '우회전' };
 const MAP_KEY = 'citymap2';
@@ -82,7 +82,7 @@ const CApp = {
     this.cam.tx = (b.x0 + b.x1) / 2; this.cam.ty = (b.y0 + b.y1) / 2; this.cam.tz = 0;
     // 도시 밖으로 길게 뻗은 출입로는 빼고 크기를 잰다
     let r = 0; for (const N of this.net.nodes) if (!N.gate) r = Math.max(r, Math.hypot(N.x - this.cam.tx, N.y - this.cam.ty));
-    this.cam.dist = clamp((r * 2.1 + 160) * Math.max(1, asp * 0.95), 150, 2600);
+    this.cam.dist = clamp((r * 2.1 + 160) * Math.max(1, asp * 0.95), 150, 7000);
   },
   setEdit(on) {
     if (on === this.editing) return;
@@ -251,7 +251,7 @@ const CApp = {
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (this.mode === 'follow' || this.mode === 'driver') this.toOrbitAtSel();
-      this.cam.dist = clamp(this.cam.dist * Math.exp(e.deltaY * 0.0012), 15, 3000);
+      this.cam.dist = clamp(this.cam.dist * Math.exp(e.deltaY * 0.0012), 15, 8000);
     }, { passive: false });
     addEventListener('keydown', (e) => {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
@@ -369,7 +369,9 @@ const CApp = {
       const o = b.dataset.ptpl === 'grid' ? { NX: v('NX'), NY: v('NY'), B: v('B'), lanes: v('lanes'), seed: this.cfg.seed } : { seed: this.cfg.seed };
       CEdit.undo.push(JSON.stringify(this.map));
       this.map = makeTemplate(b.dataset.ptpl, o);
-      this.readPanel(); this.save(); this.panel(false);
+      this.readPanel();
+      if (b.dataset.ptpl === 'metro' && this.cfg.demand < 10000) { this.cfg.demand = 30000; this.fillPanel(); }   // 대도시는 수요도 크게
+      this.save(); this.panel(false);
       if (this.editing) this.mapChanged(true); else this.rebuild(true);
       this.toast(`${this.map.name} — 건물 ${this.map.blds.length}채`, 3);
     };
@@ -382,18 +384,18 @@ const CApp = {
   },
   fillPanel() {
     const c = this.cfg;
-    $('#c_demand').value = c.demand; $('#c_inner').value = c.inner; $('#c_seed').value = c.seed; $('#c_coord').checked = !!c.coord;
+    $('#c_demand').value = c.demand; $('#c_inner').value = c.inner; $('#c_through').value = c.through == null ? 0.7 : c.through; $('#c_seed').value = c.seed; $('#c_coord').checked = !!c.coord;
     $('#c_phase').value = this.map.sig.phase || 'lead'; $('#c_cycle').value = this.map.sig.cycle || 100;
     this.readPanel(true);
   },
   readPanel(onlyLabels) {
     const v = (id) => +$('#' + id).value;
-    $('#v_demand').textContent = fmt0(v('c_demand')) + ' 대/시'; $('#v_inner').textContent = Math.round(v('c_inner') * 100) + ' %';
+    $('#v_demand').textContent = fmt0(v('c_demand')) + ' 대/시'; $('#v_inner').textContent = Math.round(v('c_inner') * 100) + ' %'; $('#v_through').textContent = Math.round(v('c_through') * 100) + ' %';
     $('#v_seed').textContent = v('c_seed'); $('#v_cycle').textContent = v('c_cycle') + ' 초';
     for (const k of ['NX', 'NY', 'B', 'lanes']) { const el = $('#vt_' + k); if (el) el.textContent = $('#t_' + k).value + (k === 'B' ? ' m' : ''); }
     if (onlyLabels) return;
     const c = this.cfg;
-    c.demand = v('c_demand'); c.inner = v('c_inner'); c.seed = v('c_seed'); c.coord = $('#c_coord').checked;
+    c.demand = v('c_demand'); c.inner = v('c_inner'); c.through = v('c_through'); c.seed = v('c_seed'); c.coord = $('#c_coord').checked;
     this.map.sig.phase = $('#c_phase').value; this.map.sig.cycle = v('c_cycle');
   },
   analysis() {

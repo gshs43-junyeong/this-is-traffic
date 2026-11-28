@@ -415,7 +415,8 @@ function compileNet(map, opt) {
     if (!N.gate) continue;
     const l = N.legs[0], R = l.road;
     const gin = l.outLink, gout = l.inLink;      // 게이트에서 나가는 구간 = 도시로 들어오는 길
-    const w = (R.cl.score >= 5 ? 5 : R.cl.score) * Math.max(1, R.n[0] + R.n[1]) / 2 * (+N.m.w || 1);
+    // 고속도로 출입구는 세 배 — 도시 밖과 오가는 차의 큰 몫이 고속도로를 탄다
+    const w = (R.cl.fast && R.cls === 'highway' ? 15 : R.cl.score) * Math.max(1, R.n[0] + R.n[1]) / 2 * (+N.m.w || 1);
     net.gates.push({ N, inL: gin, outL: gout, w, road: R });
   }
   // 서로 오갈 수 있는 가장 큰 구간 묶음 — 건물은 여기에만 붙인다 (출입로에 매달린 길은 한 출입구로만 오간다)
